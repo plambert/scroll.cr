@@ -1,0 +1,13 @@
+name: scroll
+version: 0.1.0
+
+authors:
+  - Paul M. Lambert <plambert@plambert.net>
+
+targets:
+  scroll:
+    main: src/scroll.cr
+
+crystal: '>= 1.20.3'
+
+license: MIT
