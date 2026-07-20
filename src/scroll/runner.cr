@@ -65,44 +65,64 @@ module Scroll
       end
     end
 
+    # The render fiber never creates a timer event of its own: it only ever
+    # blocks on a channel receive or on a STDERR write. The periodic redraw is
+    # driven by a separate ticker fiber whose only job is to sleep and post a
+    # tick. Keeping the timer machinery on a fiber that does no blocking IO
+    # avoids the io_write-vs-select_timeout conflict path in the event loop.
     private def render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
-      renderer = Renderer.new(STDERR, sanitize: @config.sanitize?)
-      tail = Tail.new(@config.lines)
-      interval = @config.interval_ms.milliseconds
-      last_render = Time.instant
-      dirty = false
-      renderer.start
+      # Assigned before the begin so it is guaranteed non-nil in the rescue.
+      ticking = Atomic(Bool).new(true)
+      begin
+        renderer = Renderer.new(STDERR, sanitize: @config.sanitize?)
+        tail = Tail.new(@config.lines)
+        ticks = Channel(Nil).new(1)
+        start_ticker(ticks, ticking)
+        dirty = false
+        renderer.start
 
-      loop do
-        select
-        when chunk = filled.receive
-          break if chunk.nil?
-          tail.feed(chunk.buffer[0, chunk.size], chunk.offset)
-          free.send chunk.buffer
-          dirty = true
-          if last_render.elapsed >= interval
-            renderer.draw tail.snapshot
-            dirty = false
-            last_render = Time.instant
+        loop do
+          select
+          when message = filled.receive
+            break if message.nil?
+            tail.feed(message.buffer[0, message.size], message.offset)
+            free.send message.buffer
+            dirty = true
+          when ticks.receive
+            if dirty
+              renderer.draw tail.snapshot
+              dirty = false
+            end
           end
-        when timeout(interval)
-          if dirty
-            renderer.draw tail.snapshot
-            dirty = false
-            last_render = Time.instant
+        end
+
+        ticking.set false
+        tail.finalize if @config.final?
+        renderer.draw tail.snapshot
+        renderer.finish
+        done.send nil
+      rescue IO::Error
+        # STDERR failed (terminal closed). Stop rendering, but keep draining so
+        # the hot path never blocks on a full handoff channel, then release it.
+        ticking.set false
+        drain filled, free
+        done.send nil
+      end
+    end
+
+    private def start_ticker(ticks : Channel(Nil), running : Atomic(Bool)) : Nil
+      interval = @config.interval_ms.milliseconds
+      interval = 1.millisecond if interval.zero? # avoid a busy-spin ticker
+      spawn(name: "scroll-tick") do
+        while running.get
+          sleep interval
+          # Non-blocking post: if a tick is already pending, drop this one.
+          select
+          when ticks.send(nil)
+          else
           end
         end
       end
-
-      tail.finalize if @config.final?
-      renderer.draw tail.snapshot
-      renderer.finish
-      done.send nil
-    rescue IO::Error
-      # STDERR failed (terminal closed). Stop rendering, but keep draining so the
-      # hot path never blocks on a full handoff channel, then release the pump.
-      drain filled, free
-      done.send nil
     end
 
     private def drain(filled : Channel(Chunk?), free : Channel(Bytes)) : Nil
