@@ -15,7 +15,16 @@ module Scroll
     record Chunk, buffer : Bytes, size : Int32, offset : Int64
 
     def initialize(@config : CLI)
-      @display = @config.force? || STDERR.tty?
+      @display =
+        if @config.force?
+          true
+        elsif STDERR.tty? && STDOUT.tty?
+          # STDOUT and STDERR are the same terminal: the passthrough would flood
+          # the terminal and collide with the display. Disable the display.
+          false
+        else
+          STDERR.tty?
+        end
     end
 
     def run : Nil
@@ -23,8 +32,17 @@ module Scroll
       if @display
         run_with_display
       else
+        warn_stdout_is_tty if STDERR.tty? && STDOUT.tty? && !@config.force?
         run_passthrough
       end
+    end
+
+    private def warn_stdout_is_tty : Nil
+      STDERR.puts "scroll: stdout is a terminal, so the tail display is disabled " \
+                  "(it would corrupt the passthrough). Redirect or pipe stdout, " \
+                  "e.g. `... | scroll > file`, or pass --force."
+    rescue IO::Error
+      # Nothing we can do if even the warning can't be written.
     end
 
     # STDIN -> STDOUT only. Used when STDERR is not a terminal (no display).
