@@ -2,10 +2,17 @@ require "./spec_helper"
 
 # Feed a String as a chunk beginning at `start`.
 private def feed_chunk(tail : Scroll::Tail, text : String, start : Int64) : Nil
-  tail.feed(text.to_slice, start)
+  tail.tail_feed(text, start)
 end
 
 module Scroll
+  class Tail
+    # Test helper: feed a String and return the byte offset just past it.
+    def tail_feed(text : String, start : Int64) : Nil
+      feed(text.to_slice, start)
+    end
+  end
+
   describe Tail do
     it "keeps the last N complete lines" do
       tail = Tail.new(3)
@@ -27,21 +34,29 @@ module Scroll
       tail.snapshot.should eq(["abc"])
     end
 
-    it "resets to a contiguous suffix when a chunk was dropped (offset gap)" do
-      tail = Tail.new(5)
-      feed_chunk(tail, "1\n2\n3\n", 0_i64) # ends at offset 6
+    it "freezes the window on a gap until a fresh full window is rebuilt" do
+      tail = Tail.new(3)
+      feed_chunk(tail, "1\n2\n3\n", 0_i64) # ends at offset 6; window [1,2,3]
       tail.snapshot.should eq(["1", "2", "3"])
-      feed_chunk(tail, "7\n8\n", 100_i64) # gap: 100 != 6
-      # Lines 4..6 were dropped; showing [3,7,8] would be non-contiguous, so the
-      # window resets and shows only the new contiguous segment.
-      tail.snapshot.should eq(["7", "8"])
+
+      # Gap at offset 100. The leading "TAIL" is the dropped line's remainder and
+      # must be discarded; b and c begin a new segment that is not yet full.
+      feed_chunk(tail, "TAIL\nb\nc\n", 100_i64)
+      tail.snapshot.should eq(["1", "2", "3"]) # frozen on the last good window
+
+      feed_chunk(tail, "d\n", 109_i64) # new segment [b,c,d] fills -> revealed
+      tail.snapshot.should eq(["b", "c", "d"])
     end
 
-    it "discards a pre-gap partial line rather than splicing it onto post-gap bytes" do
-      tail = Tail.new(3)
-      feed_chunk(tail, "ab", 0_i64)   # partial 'ab', no newline
-      feed_chunk(tail, "c\n", 50_i64) # gap: 50 != 2
-      tail.snapshot.should eq(["c"])  # never "abc"
+    it "never splices a pre-gap partial onto post-gap bytes" do
+      tail = Tail.new(2)
+      feed_chunk(tail, "x\ny\nab", 0_i64) # window [x,y]; "ab" is a partial head
+      tail.snapshot.should eq(["x", "y"])
+
+      # "ab" + dropped bytes + "c" would be one line: "c" is discarded, never "abc".
+      feed_chunk(tail, "c\nd\ne\n", 100_i64) # d,e form the new segment (cap 2) -> revealed
+      tail.snapshot.should eq(["d", "e"])
+      tail.snapshot.should_not contain("abc")
     end
 
     it "includes a trailing newline-less line only after finalize" do
@@ -50,6 +65,15 @@ module Scroll
       tail.snapshot.should eq(["1", "2"])
       tail.finalize
       tail.snapshot.should eq(["1", "2", "tail"])
+    end
+
+    it "reveals a partial rebuilt segment on finalize" do
+      tail = Tail.new(5)
+      feed_chunk(tail, "1\n2\n3\n4\n5\n", 0_i64)
+      feed_chunk(tail, "TAIL\nb\nc\n", 100_i64) # segment [b,c] never fills to 5
+      tail.snapshot.should eq(["1", "2", "3", "4", "5"])
+      tail.finalize
+      tail.snapshot.should eq(["b", "c"])
     end
 
     it "handles a chunk split across a newline run" do
