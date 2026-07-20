@@ -107,7 +107,7 @@ module Scroll
       # Assigned before the begin so it is guaranteed non-nil in the rescue.
       ticking = Atomic(Bool).new(true)
       begin
-        renderer = Renderer.new(STDERR, sanitize: @config.sanitize?)
+        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
         tail = Tail.new(@config.lines)
         ticks = Channel(Nil).new(1)
         start_ticker(ticks, ticking)
