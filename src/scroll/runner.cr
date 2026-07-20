@@ -73,7 +73,7 @@ module Scroll
       reserved = Bytes.new(CHUNK_SIZE)
       offset = 0_i64
       loop do
-        pooled = try_receive free
+        pooled = acquire_buffer free
         buffer = pooled || reserved
         count = STDIN.read(buffer)
         break if count == 0
@@ -81,6 +81,21 @@ module Scroll
         filled.send(Chunk.new(buffer, count, offset)) unless pooled.nil?
         offset += count
       end
+    end
+
+    # Get a pool buffer without blocking STDOUT. If the pool is momentarily
+    # empty, yield once so the cooperatively-scheduled render fiber can recycle
+    # buffers, then retry. Under a steady trickle of small reads the pump would
+    # otherwise never yield, starve the render fiber, drain the pool, and drop
+    # chunks (each drop forces a contiguity reset in the display). If the render
+    # fiber is genuinely behind (parked on a slow STDERR write) the yield returns
+    # at once and we fall back to a drop, so STDOUT is never gated on STDERR.
+    private def acquire_buffer(free : Channel(Bytes)) : Bytes?
+      if buffer = try_receive free
+        return buffer
+      end
+      Fiber.yield
+      try_receive free
     end
 
     # The render fiber never creates a timer event of its own: it only ever
