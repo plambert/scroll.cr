@@ -20,11 +20,17 @@ module Scroll
         ws_ypixel : LibC::UShort
       end
 
-      fun ioctl(fd : LibC::Int, request : LibC::ULong, winsize : Winsize*) : LibC::Int
+      # `ioctl` is variadic in C. It MUST be declared variadic here: on the
+      # Apple ARM64 ABI a fixed trailing parameter is passed in a register while
+      # libc reads the variadic argument from the stack, so a fixed-arg binding
+      # passes a garbage pointer and the call fails (returning -1, size 0).
+      fun ioctl(fd : LibC::Int, request : LibC::ULong, ...) : LibC::Int
     end
 
-    # Returns {rows, columns} for the terminal on `fd` (STDERR by default).
-    def self.size(fd : Int32 = 2) : {Int32, Int32}
+    # Returns {rows, columns} for the terminal on `fd`. The display lives on
+    # STDERR, so that is the stream whose size matters — never STDOUT, which is
+    # usually redirected in a pipeline.
+    def self.size(fd : Int32 = STDERR.fd) : {Int32, Int32}
       winsize = LibTerminal::Winsize.new
       if LibTerminal.ioctl(fd, TIOCGWINSZ, pointerof(winsize)) == 0 &&
          winsize.ws_row > 0 && winsize.ws_col > 0
