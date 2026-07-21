@@ -60,6 +60,31 @@ module Scroll
       cli.null.should be_true
     end
 
+    it "defaults to no alt display" do
+      cli = CLI.new([] of String)
+      cli.alt?.should be_false
+      cli.alt_mode.should eq(CLI::AltMode::Auto)
+    end
+
+    it "enables the alt display in auto mode with --alt" do
+      cli = CLI.new(["--alt"])
+      cli.alt?.should be_true
+      cli.alt_mode.should eq(CLI::AltMode::Auto)
+    end
+
+    it "forces region mode with --alt-region" do
+      cli = CLI.new(["--alt-region"])
+      cli.alt?.should be_true
+      cli.alt_mode.should eq(CLI::AltMode::Region)
+    end
+
+    it "forces full mode with --alt-full, still accepting -N" do
+      cli = CLI.new(["--alt-full", "-n", "20"])
+      cli.alt?.should be_true
+      cli.alt_mode.should eq(CLI::AltMode::Full)
+      cli.lines.should eq(20)
+    end
+
     it "raises on an unknown option" do
       expect_raises(ArgumentError, /unknown option/) { CLI.new(["--nope"]) }
     end

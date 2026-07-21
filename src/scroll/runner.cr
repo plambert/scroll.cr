@@ -134,6 +134,8 @@ module Scroll
     # tick. Keeping the timer machinery on a fiber that does no blocking IO
     # avoids the io_write-vs-select_timeout conflict path in the event loop.
     private def render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
+      return alt_render_loop(free, filled, done) if @config.alt?
+
       # Assigned before the begin so it is guaranteed non-nil in the rescue.
       ticking = Atomic(Bool).new(true)
       begin
@@ -171,6 +173,57 @@ module Scroll
         ticking.set false
         drain filled, free
         done.send nil
+      end
+    end
+
+    # The --alt render loop. Same channel/ticker structure as render_loop, but
+    # the display is an AltRenderer that appends complete lines to the alternate
+    # screen instead of repainting a fixed window. Region mode also installs a
+    # SIGWINCH trap so the scroll band is re-applied on resize.
+    private def alt_render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
+      ticking = Atomic(Bool).new(true)
+      begin
+        renderer = AltRenderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, region: alt_region?)
+        ticks = Channel(Nil).new(1)
+        start_ticker(ticks, ticking)
+        dirty = false
+        Signal::WINCH.trap { renderer.notify_resize }
+        renderer.start
+
+        loop do
+          select
+          when message = filled.receive
+            break if message.nil?
+            renderer.feed(message.buffer[0, message.size], message.offset)
+            free.send message.buffer
+            dirty = true
+          when ticks.receive
+            if dirty
+              renderer.flush
+              dirty = false
+            end
+          end
+        end
+
+        ticking.set false
+        renderer.finish(@config.final?)
+        done.send nil
+      rescue IO::Error
+        # STDERR failed (terminal closed). Stop rendering, but keep draining so
+        # the hot path never blocks on a full handoff channel, then release it.
+        ticking.set false
+        drain filled, free
+        done.send nil
+      end
+    end
+
+    # Resolve the concrete alt mode. Auto assumes region mode unless $TERM marks
+    # a non-VT terminal.
+    private def alt_region? : Bool
+      case @config.alt_mode
+      in .region? then true
+      in .full?   then false
+      in .auto?   then Terminal.scroll_region_supported?
       end
     end
 
@@ -215,7 +268,14 @@ module Scroll
     end
 
     private def install_display_teardown : Nil
-      at_exit { Renderer.restore(STDERR) }
+      # --alt teardown must also leave the alt screen and reset the scroll region;
+      # the inline path only needs the cursor shown. Both restores are idempotent
+      # and safe even if the display never started.
+      if @config.alt?
+        at_exit { AltRenderer.restore(STDERR) }
+      else
+        at_exit { Renderer.restore(STDERR) }
+      end
       # Turn a termination signal into a normal exit so the at_exit hook restores
       # the cursor instead of leaving the terminal in a hidden-cursor state.
       Process.on_terminate do |reason|

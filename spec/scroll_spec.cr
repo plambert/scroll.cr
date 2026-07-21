@@ -30,6 +30,16 @@ describe "scroll passthrough" do
     input = String.build { |str| 1.upto(5000) { |line| str << line << '\n' } }
     run_binary(binary, input.to_slice, args: ["--no-null"]).should eq(input.to_slice)
   end
+
+  # --alt changes only the STDERR display strategy; STDOUT must stay byte-for-byte
+  # regardless of the mode (and here STDERR is closed, so the display is off).
+  {% for flag in ["--alt", "--alt-region", "--alt-full"] %}
+    it "reproduces STDOUT byte-for-byte with {{ flag.id }}" do
+      pending! "run `shards build` first" unless File.exists?(binary)
+      input = String.build { |str| 1.upto(5000) { |line| str << line << '\n' } }
+      run_binary(binary, input.to_slice, [{{ flag }}]).should eq(input.to_slice)
+    end
+  {% end %}
 end
 
 private def run_binary(binary : String, input : Bytes, args : Array(String) = [] of String) : Bytes

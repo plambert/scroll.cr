@@ -16,6 +16,13 @@ module Scroll
 
     A bare -N is shorthand for --lines N (e.g. -20 means --lines 20).
 
+    --alt draws the tail on the terminal's alternate screen instead of inline: it
+    is faster (the terminal scrolls rather than repainting N rows), it vanishes on
+    exit, and the original screen and scrollback are restored. Region mode honors
+    -N (only that band scrolls); full mode ignores -N and uses the whole screen.
+    --alt auto-selects region mode unless $TERM is dumb/unset; --alt-region and
+    --alt-full force the choice.
+
     Examples:
       long-running-build | scroll -20 | tee build.log
       tail -f access.log | scroll | grep -v healthcheck > filtered.log
@@ -33,6 +40,14 @@ module Scroll
     DEFAULT_INTERVAL      =  40
     DEFAULT_POLL          = 250
     DEFAULT_WATCH_TIMEOUT =  10
+
+    # Which alternate-screen rendering to use when --alt is on. Auto picks Region
+    # when DECSTBM is judged supported, else Full.
+    enum AltMode
+      Auto
+      Region
+      Full
+    end
 
     property lines : Int32 = DEFAULT_LINES
     property interval_ms : Int32 = DEFAULT_INTERVAL
@@ -55,6 +70,8 @@ module Scroll
     # The sort-key selector; nil means the whole line. Parsed at CLI time into
     # one of two forms (integer column or /regex/), see `parse_sort_key`.
     property sort_by : SortKey? = nil
+    property? alt : Bool = false
+    property alt_mode : AltMode = AltMode::Auto
 
     # True when following a file. Passed to Runner as the "mode implies null"
     # input so file mode is silent on STDOUT unless --no-null re-enables teeing.
@@ -98,6 +115,18 @@ module Scroll
         parser.on("--human", "Compare sort keys as human/natural numbers, e.g. 1k < 2M (implies --sort)") do
           @human = true
           @sort = true
+        end
+        parser.on("--alt", "Draw on the alternate screen (fast; vanishes on exit, scrollback kept)") do
+          @alt = true
+          @alt_mode = AltMode::Auto
+        end
+        parser.on("--alt-region", "Alternate screen, force region mode (honors -N)") do
+          @alt = true
+          @alt_mode = AltMode::Region
+        end
+        parser.on("--alt-full", "Alternate screen, force full mode (ignores -N, uses the whole screen)") do
+          @alt = true
+          @alt_mode = AltMode::Full
         end
         parser.on("--version", "Show version and exit") do
           puts "#{PROGRAM_NAME} #{VERSION}"

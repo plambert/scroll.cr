@@ -5,6 +5,7 @@ require "./scroll/sorter"
 require "./scroll/terminal"
 require "./scroll/renderer"
 require "./scroll/source"
+require "./scroll/alt_renderer"
 require "./scroll/cli"
 require "./scroll/runner"
 
