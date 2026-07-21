@@ -12,7 +12,7 @@ module Scroll
     Options:
     HELP_BANNER
 
-  HELP_FOOTER = <<-HELP_FOOTER
+  HELP_FOOTER = <<-'HELP_FOOTER'
 
     A bare -N is shorthand for --lines N (e.g. -20 means --lines 20).
 
@@ -22,6 +22,8 @@ module Scroll
       noisy-job | scroll --null   # watch the tail, discard the output
       scroll -f /var/log/app.log --pid $(pgrep -f app)   # follow until app exits
       scroll -f build.log --no-null | tee copy.log       # follow and tee STDOUT
+      some-stream | scroll -s --sort-by 2 > out.log
+      du -sh * | scroll --human --sort-by '/(?<sort>[\d.]+[kKmMgGtT]?B?)/' > /dev/null
     HELP_FOOTER
 
   # Parsed command-line configuration. The constructor takes an Array(String)
@@ -47,6 +49,12 @@ module Scroll
     property? from_start : Bool = false
     property? watch_proc : Bool = false
     property watch_proc_timeout_s : Int32 = DEFAULT_WATCH_TIMEOUT
+    property? sort : Bool = false
+    property? reverse : Bool = false
+    property? human : Bool = false
+    # The sort-key selector; nil means the whole line. Parsed at CLI time into
+    # one of two forms (integer column or /regex/), see `parse_sort_key`.
+    property sort_by : SortKey? = nil
 
     # True when following a file. Passed to Runner as the "mode implies null"
     # input so file mode is silent on STDOUT unless --no-null re-enables teeing.
@@ -80,6 +88,16 @@ module Scroll
         parser.on("--watch-proc", "With --file, exit once no process holds the file open for writing (Linux only)") { @watch_proc = true }
         parser.on("--watch-proc-timeout SEC", "Idle seconds before --watch-proc exits (default: #{DEFAULT_WATCH_TIMEOUT})") do |value|
           @watch_proc_timeout_s = parse_int value, "--watch-proc-timeout"
+        end
+        parser.on("-s", "--sort", "Sort the displayed lines (STDOUT stays in input order)") { @sort = true }
+        parser.on("-r", "--reverse", "Reverse the display order (descending, or newest-first without --sort)") { @reverse = true }
+        parser.on("--sort-by SPEC", "Sort key: a 1-based column number, or a /regex/ (implies --sort)") do |value|
+          @sort_by = parse_sort_key value
+          @sort = true
+        end
+        parser.on("--human", "Compare sort keys as human/natural numbers, e.g. 1k < 2M (implies --sort)") do
+          @human = true
+          @sort = true
         end
         parser.on("--version", "Show version and exit") do
           puts "#{PROGRAM_NAME} #{VERSION}"
@@ -147,6 +165,23 @@ module Scroll
 
     private def parse_int(value : String, flag : String) : Int32
       value.to_i? || raise ArgumentError.new "#{flag}: not an integer: #{value}"
+    end
+
+    # Parse a `--sort-by` SPEC into a SortKey. A fully slash-delimited `/.../`
+    # value is a PCRE2 regex; anything else must be a 1-based integer column.
+    private def parse_sort_key(value : String) : SortKey
+      if value.size >= 2 && value.starts_with?('/') && value.ends_with?('/')
+        inner = value[1..-2]
+        begin
+          SortKey::Pattern.new(Regex.new(inner))
+        rescue ex : ArgumentError | Regex::Error
+          raise ArgumentError.new "--sort-by: invalid regex: #{ex.message}"
+        end
+      else
+        index = parse_int value, "--sort-by"
+        raise ArgumentError.new "--sort-by must be >= 1" if index < 1
+        SortKey::Field.new(index)
+      end
     end
   end
 end

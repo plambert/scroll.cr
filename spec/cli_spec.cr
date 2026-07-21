@@ -125,5 +125,59 @@ module Scroll
         expect_raises(ArgumentError, /only supported on Linux/) { CLI.new(["-f", "log.txt", "--watch-proc"]) }
       end
     {% end %}
+
+    it "defaults the sort predicates to false and sort_by to nil" do
+      cli = CLI.new([] of String)
+      cli.sort?.should be_false
+      cli.reverse?.should be_false
+      cli.human?.should be_false
+      cli.sort_by.should be_nil
+    end
+
+    it "parses -s/--sort and -r/--reverse" do
+      CLI.new(["-s"]).sort?.should be_true
+      CLI.new(["--sort"]).sort?.should be_true
+      CLI.new(["-r"]).reverse?.should be_true
+      CLI.new(["--reverse"]).reverse?.should be_true
+    end
+
+    it "does not confuse -r/-s with the bare-number shorthand" do
+      cli = CLI.new(["-r", "-s", "-5"])
+      cli.reverse?.should be_true
+      cli.sort?.should be_true
+      cli.lines.should eq(5)
+    end
+
+    it "parses --sort-by INT into a Field selector and implies --sort" do
+      cli = CLI.new(["--sort-by", "2"])
+      cli.sort?.should be_true
+      selector = cli.sort_by
+      selector.should be_a(SortKey::Field)
+      selector.as(SortKey::Field).index.should eq(2)
+    end
+
+    it "parses --sort-by /regex/ into a Pattern selector and implies --sort" do
+      cli = CLI.new(["--sort-by", "/(?<sort>\\d+)/"])
+      cli.sort?.should be_true
+      cli.sort_by.should be_a(SortKey::Pattern)
+    end
+
+    it "sets --human and implies --sort" do
+      cli = CLI.new(["--human"])
+      cli.human?.should be_true
+      cli.sort?.should be_true
+    end
+
+    it "rejects a --sort-by column below 1" do
+      expect_raises(ArgumentError, /must be >= 1/) { CLI.new(["--sort-by", "0"]) }
+    end
+
+    it "rejects a non-integer, non-regex --sort-by" do
+      expect_raises(ArgumentError, /not an integer/) { CLI.new(["--sort-by", "abc"]) }
+    end
+
+    it "rejects an invalid --sort-by regex" do
+      expect_raises(ArgumentError, /invalid regex/) { CLI.new(["--sort-by", "/(unclosed/"]) }
+    end
   end
 end

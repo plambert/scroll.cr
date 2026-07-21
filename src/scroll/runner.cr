@@ -139,6 +139,7 @@ module Scroll
       begin
         renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
         tail = Tail.new(@config.lines)
+        sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         ticks = Channel(Nil).new(1)
         start_ticker(ticks, ticking)
         dirty = false
@@ -153,7 +154,7 @@ module Scroll
             dirty = true
           when ticks.receive
             if dirty
-              renderer.draw tail.snapshot
+              renderer.draw sorter.order(tail.snapshot)
               dirty = false
             end
           end
@@ -161,7 +162,7 @@ module Scroll
 
         ticking.set false
         tail.finalize if @config.final?
-        renderer.draw tail.snapshot
+        renderer.draw sorter.order(tail.snapshot)
         renderer.finish
         done.send nil
       rescue IO::Error

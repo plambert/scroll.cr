@@ -1,6 +1,7 @@
 # scroll — copy STDIN to STDOUT unchanged while showing the tail of the stream
 # in a live display on STDERR.
 require "./scroll/tail"
+require "./scroll/sorter"
 require "./scroll/terminal"
 require "./scroll/renderer"
 require "./scroll/source"
