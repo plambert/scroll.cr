@@ -37,6 +37,29 @@ module Scroll
       cli.final?.should be_false
     end
 
+    it "defaults --null to unspecified" do
+      CLI.new([] of String).null.should be_nil
+    end
+
+    it "sets --null true" do
+      CLI.new(["--null"]).null.should be_true
+    end
+
+    it "sets --no-null false" do
+      CLI.new(["--no-null"]).null.should be_false
+    end
+
+    it "lets the last of --null/--no-null win" do
+      CLI.new(["--null", "--no-null"]).null.should be_false
+      CLI.new(["--no-null", "--null"]).null.should be_true
+    end
+
+    it "composes --null with other flags" do
+      cli = CLI.new(["--null", "-20"])
+      cli.lines.should eq(20)
+      cli.null.should be_true
+    end
+
     it "raises on an unknown option" do
       expect_raises(ArgumentError, /unknown option/) { CLI.new(["--nope"]) }
     end

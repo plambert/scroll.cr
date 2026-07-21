@@ -19,6 +19,7 @@ module Scroll
     Examples:
       long-running-build | scroll -20 | tee build.log
       tail -f access.log | scroll | grep -v healthcheck > filtered.log
+      noisy-job | scroll --null   # watch the tail, discard the output
     HELP_FOOTER
 
   # Parsed command-line configuration. The constructor takes an Array(String)
@@ -32,6 +33,9 @@ module Scroll
     property? force : Bool = false
     property? sanitize : Bool = true
     property? final : Bool = false
+    # nil = unspecified, true = --null, false = --no-null. Resolved in Runner
+    # together with any mode (e.g. --file) that implies null.
+    property null : Bool? = nil
 
     def initialize(opts = ARGV.dup)
       opts = expand_count_shorthand(opts)
@@ -46,6 +50,8 @@ module Scroll
         parser.on("--force", "Draw the display even when STDERR is not a TTY") { @force = true }
         parser.on("--no-sanitize", "Do not strip control/escape bytes from the display") { @sanitize = false }
         parser.on("--final", "On EOF, also show a trailing line that has no newline") { @final = true }
+        parser.on("--null", "Consume STDIN without copying it to STDOUT") { @null = true }
+        parser.on("--no-null", "Force copying STDIN to STDOUT, even in modes that imply --null (e.g. --file)") { @null = false }
         parser.on("--version", "Show version and exit") do
           puts "#{PROGRAM_NAME} #{VERSION}"
           exit 0

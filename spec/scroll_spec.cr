@@ -18,11 +18,23 @@ describe "scroll passthrough" do
     input = "one\ntwo\nthree".to_slice
     run_binary(binary, input).should eq(input)
   end
+
+  it "writes nothing to STDOUT with --null" do
+    pending! "run `shards build` first" unless File.exists?(binary)
+    input = String.build { |str| 1.upto(5000) { |line| str << line << '\n' } }
+    run_binary(binary, input.to_slice, args: ["--null"]).should eq(Bytes.empty)
+  end
+
+  it "reproduces input on STDOUT with --no-null" do
+    pending! "run `shards build` first" unless File.exists?(binary)
+    input = String.build { |str| 1.upto(5000) { |line| str << line << '\n' } }
+    run_binary(binary, input.to_slice, args: ["--no-null"]).should eq(input.to_slice)
+  end
 end
 
-private def run_binary(binary : String, input : Bytes) : Bytes
+private def run_binary(binary : String, input : Bytes, args : Array(String) = [] of String) : Bytes
   output = IO::Memory.new
-  process = Process.new(binary, input: :pipe, output: :pipe, error: :close)
+  process = Process.new(binary, args, input: :pipe, output: :pipe, error: :close)
   spawn do
     process.input.write input
     process.input.close

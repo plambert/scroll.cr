@@ -41,6 +41,8 @@ Options:
         --force          Draw the display even when STDERR is not a TTY
         --no-sanitize    Do not strip control/escape bytes from the display
         --final          On EOF, also show a trailing line that has no newline
+        --null           Consume STDIN without copying it to STDOUT
+        --no-null        Force copying STDIN to STDOUT, even in modes that imply --null (e.g. --file)
         --version        Show version and exit
     -h, --help           Show this help and exit
 ```

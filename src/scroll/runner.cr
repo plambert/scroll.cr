@@ -15,16 +15,27 @@ module Scroll
     record Chunk, buffer : Bytes, size : Int32, offset : Int64
 
     def initialize(@config : CLI)
-      @display =
-        if @config.force?
-          true
-        elsif STDERR.tty? && STDOUT.tty?
-          # STDOUT and STDERR are the same terminal: the passthrough would flood
-          # the terminal and collide with the display. Disable the display.
-          false
-        else
-          STDERR.tty?
-        end
+      @suppress = Runner.suppress_stdout?(@config.null, false)
+      @display = Runner.display_enabled?(@config.force?, @suppress, STDERR.tty?, STDOUT.tty?)
+    end
+
+    # Should STDOUT be suppressed? User intent (nil/true/false) resolved against
+    # whether the active mode implies null. --no-null (false) always wins.
+    def self.suppress_stdout?(null_pref : Bool?, mode_implies_null : Bool) : Bool
+      case null_pref
+      in true  then true              # --null
+      in false then false             # --no-null forces teeing
+      in Nil   then mode_implies_null # default: implied by mode (e.g. --file)
+      end
+    end
+
+    # Whether the STDERR tail display runs. When STDOUT is suppressed there is no
+    # passthrough to collide with, so the same-terminal suppression is lifted.
+    def self.display_enabled?(force : Bool, suppress_stdout : Bool, stderr_tty : Bool, stdout_tty : Bool) : Bool
+      return true if force
+      return stderr_tty if suppress_stdout
+      return false if stderr_tty && stdout_tty
+      stderr_tty
     end
 
     def run : Nil
@@ -32,7 +43,7 @@ module Scroll
       if @display
         run_with_display
       else
-        warn_stdout_is_tty if STDERR.tty? && STDOUT.tty? && !@config.force?
+        warn_stdout_is_tty if STDERR.tty? && STDOUT.tty? && !@config.force? && !@suppress
         run_passthrough
       end
     end
@@ -176,6 +187,7 @@ module Scroll
     end
 
     private def write_stdout(slice : Bytes) : Nil
+      return if @suppress
       STDOUT.write slice
     rescue ex : IO::Error
       raise ex unless ex.os_error == Errno::EPIPE || ex.message.try(&.includes?("Broken pipe"))
