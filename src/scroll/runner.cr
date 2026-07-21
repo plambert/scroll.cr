@@ -15,8 +15,25 @@ module Scroll
     record Chunk, buffer : Bytes, size : Int32, offset : Int64
 
     def initialize(@config : CLI)
-      @suppress = Runner.suppress_stdout?(@config.null, false)
+      @suppress = Runner.suppress_stdout?(@config.null, @config.file?)
       @display = Runner.display_enabled?(@config.force?, @suppress, STDERR.tty?, STDOUT.tty?)
+      @source = Runner.build_source(@config)
+    end
+
+    # STDIN by default; a followed file when --file is set.
+    def self.build_source(config : CLI) : Source
+      if path = config.file
+        FileSource.new(
+          path,
+          config.poll_ms.milliseconds,
+          from_start: config.from_start?,
+          pid: config.pid,
+          watch_proc: config.watch_proc?,
+          watch_proc_timeout: config.watch_proc_timeout_s.seconds,
+        )
+      else
+        StdinSource.new
+      end
     end
 
     # Should STDOUT be suppressed? User intent (nil/true/false) resolved against
@@ -46,6 +63,8 @@ module Scroll
         warn_stdout_is_tty if STDERR.tty? && STDOUT.tty? && !@config.force? && !@suppress
         run_passthrough
       end
+    ensure
+      @source.close
     end
 
     private def warn_stdout_is_tty : Nil
@@ -60,7 +79,7 @@ module Scroll
     private def run_passthrough : Nil
       buffer = Bytes.new(CHUNK_SIZE)
       loop do
-        count = STDIN.read(buffer)
+        count = @source.read(buffer)
         break if count == 0
         write_stdout buffer[0, count]
       end
@@ -86,7 +105,7 @@ module Scroll
       loop do
         pooled = acquire_buffer free
         buffer = pooled || reserved
-        count = STDIN.read(buffer)
+        count = @source.read(buffer)
         break if count == 0
         write_stdout buffer[0, count]
         filled.send(Chunk.new(buffer, count, offset)) unless pooled.nil?

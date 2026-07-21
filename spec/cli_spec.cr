@@ -75,5 +75,55 @@ module Scroll
     it "raises on an unexpected positional argument" do
       expect_raises(ArgumentError, /unexpected argument/) { CLI.new(["file.txt"]) }
     end
+
+    it "accepts -f/--file and reports file mode" do
+      CLI.new(["-f", "log.txt"]).file.should eq("log.txt")
+      cli = CLI.new(["--file", "log.txt"])
+      cli.file.should eq("log.txt")
+      cli.file?.should be_true
+    end
+
+    it "is not in file mode without --file" do
+      CLI.new([] of String).file?.should be_false
+    end
+
+    it "leaves --null unspecified in file mode (silent STDOUT is resolved later)" do
+      cli = CLI.new(["-f", "log.txt"])
+      cli.null.should be_nil
+      cli.file?.should be_true
+    end
+
+    it "keeps --no-null explicit in file mode so teeing wins" do
+      cli = CLI.new(["-f", "log.txt", "--no-null"])
+      cli.null.should be_false
+      cli.file?.should be_true
+    end
+
+    it "parses the follow knobs" do
+      cli = CLI.new(["-f", "log.txt", "--from-start", "--poll", "50", "--pid", "42"])
+      cli.from_start?.should be_true
+      cli.poll_ms.should eq(50)
+      cli.pid.should eq(42)
+    end
+
+    it "rejects a non-positive --pid" do
+      expect_raises(ArgumentError, /--pid must be > 0/) { CLI.new(["-f", "log.txt", "--pid", "0"]) }
+    end
+
+    it "rejects a --poll below 1" do
+      expect_raises(ArgumentError, /--poll must be >= 1/) { CLI.new(["-f", "log.txt", "--poll", "0"]) }
+    end
+
+    it "rejects follow knobs without --file" do
+      expect_raises(ArgumentError, /--from-start requires --file/) { CLI.new(["--from-start"]) }
+      expect_raises(ArgumentError, /--pid requires --file/) { CLI.new(["--pid", "42"]) }
+      expect_raises(ArgumentError, /--poll requires --file/) { CLI.new(["--poll", "50"]) }
+    end
+
+    {% unless flag?(:linux) %}
+      it "rejects --watch-proc off Linux" do
+        expect_raises(ArgumentError, /only supported on Linux/) { CLI.new(["-f", "log.txt", "--watch-proc"]) }
+      end
+    {% end %}
   end
 end

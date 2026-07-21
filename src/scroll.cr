@@ -3,6 +3,7 @@
 require "./scroll/tail"
 require "./scroll/terminal"
 require "./scroll/renderer"
+require "./scroll/source"
 require "./scroll/cli"
 require "./scroll/runner"
 
