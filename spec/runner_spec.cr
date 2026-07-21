@@ -37,27 +37,27 @@ module Scroll
 
     describe ".build_source" do
       it "builds a StdinSource without --file" do
-        Runner.build_source(CLI.new([] of String)).should be_a(StdinSource)
+        Runner.build_source(CLI.parse([] of String)).should be_a(StdinSource)
       end
 
       it "builds a FileSource with --file" do
-        Runner.build_source(CLI.new(["-f", "log.txt"])).should be_a(FileSource)
+        Runner.build_source(CLI.parse(["-f", "log.txt"])).should be_a(FileSource)
       end
     end
 
     describe "file mode implied null" do
       it "suppresses STDOUT by default in file mode" do
-        cli = CLI.new(["-f", "log.txt"])
+        cli = CLI.parse(["-f", "log.txt"])
         Runner.suppress_stdout?(cli.null, cli.file?).should be_true
       end
 
       it "tees STDOUT when --no-null is given in file mode" do
-        cli = CLI.new(["-f", "log.txt", "--no-null"])
+        cli = CLI.parse(["-f", "log.txt", "--no-null"])
         Runner.suppress_stdout?(cli.null, cli.file?).should be_false
       end
 
       it "does not suppress STDOUT in the default STDIN mode" do
-        cli = CLI.new([] of String)
+        cli = CLI.parse([] of String)
         Runner.suppress_stdout?(cli.null, cli.file?).should be_false
       end
     end

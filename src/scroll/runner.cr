@@ -32,7 +32,7 @@ module Scroll
     def self.build_source(config : CLI) : Source
       if path = config.file
         FileSource.new(
-          path,
+          path.to_s,
           config.poll_ms.milliseconds,
           from_start: config.from_start?,
           pid: config.pid,

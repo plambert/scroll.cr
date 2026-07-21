@@ -1,208 +1,199 @@
 require "./spec_helper"
 
+# Parse without running, the way `dispatch` would, and apply the cross-flag rules.
+private def parse(args : Array(String)) : Scroll::CLI
+  cli = Scroll::CLI.parse(Scroll::CLI.expand_count_shorthand(args))
+  cli.validate!
+  cli
+end
+
 module Scroll
   describe CLI do
-    it "defaults to 10 lines" do
-      CLI.new([] of String).lines.should eq(10)
-    end
-
-    it "treats a bare -N as shorthand for --lines N" do
-      CLI.new(["-20"]).lines.should eq(20)
-    end
-
-    it "accepts -n INT" do
-      CLI.new(["-n", "5"]).lines.should eq(5)
-    end
-
-    it "accepts --lines INT" do
-      CLI.new(["--lines", "7"]).lines.should eq(7)
-    end
-
-    it "does not confuse -n with the bare-number shorthand" do
-      CLI.new(["-n", "3"]).lines.should eq(3)
-    end
-
-    it "parses the display flags" do
-      cli = CLI.new(["--force", "--no-sanitize", "--final", "--interval", "100"])
-      cli.force?.should be_true
-      cli.sanitize?.should be_false
-      cli.final?.should be_true
-      cli.interval_ms.should eq(100)
-    end
-
-    it "defaults to sanitizing and drawing only on a tty" do
-      cli = CLI.new([] of String)
-      cli.sanitize?.should be_true
-      cli.force?.should be_false
-      cli.final?.should be_false
-    end
-
-    it "defaults --null to unspecified" do
-      CLI.new([] of String).null.should be_nil
-    end
-
-    it "sets --null true" do
-      CLI.new(["--null"]).null.should be_true
-    end
-
-    it "sets --no-null false" do
-      CLI.new(["--no-null"]).null.should be_false
-    end
-
-    it "lets the last of --null/--no-null win" do
-      CLI.new(["--null", "--no-null"]).null.should be_false
-      CLI.new(["--no-null", "--null"]).null.should be_true
-    end
-
-    it "composes --null with other flags" do
-      cli = CLI.new(["--null", "-20"])
-      cli.lines.should eq(20)
-      cli.null.should be_true
-    end
-
-    it "defaults to no alt display" do
-      cli = CLI.new([] of String)
-      cli.alt?.should be_false
-      cli.alt_mode.should eq(CLI::AltMode::Auto)
-    end
-
-    it "enables the alt display in auto mode with --alt" do
-      cli = CLI.new(["--alt"])
-      cli.alt?.should be_true
-      cli.alt_mode.should eq(CLI::AltMode::Auto)
-    end
-
-    it "forces region mode with --alt-region" do
-      cli = CLI.new(["--alt-region"])
-      cli.alt?.should be_true
-      cli.alt_mode.should eq(CLI::AltMode::Region)
-    end
-
-    it "forces full mode with --alt-full, still accepting -N" do
-      cli = CLI.new(["--alt-full", "-n", "20"])
-      cli.alt?.should be_true
-      cli.alt_mode.should eq(CLI::AltMode::Full)
-      cli.lines.should eq(20)
-    end
-
-    it "raises on an unknown option" do
-      expect_raises(ArgumentError, /unknown option/) { CLI.new(["--nope"]) }
-    end
-
-    it "raises on a non-integer line count" do
-      expect_raises(ArgumentError, /not an integer/) { CLI.new(["-n", "abc"]) }
-    end
-
-    it "raises when the line count is below 1" do
-      expect_raises(ArgumentError, /must be >= 1/) { CLI.new(["-0"]) }
-    end
-
-    it "raises on an unexpected positional argument" do
-      expect_raises(ArgumentError, /unexpected argument/) { CLI.new(["file.txt"]) }
-    end
-
-    it "accepts -f/--file and reports file mode" do
-      CLI.new(["-f", "log.txt"]).file.should eq("log.txt")
-      cli = CLI.new(["--file", "log.txt"])
-      cli.file.should eq("log.txt")
-      cli.file?.should be_true
-    end
-
-    it "is not in file mode without --file" do
-      CLI.new([] of String).file?.should be_false
-    end
-
-    it "leaves --null unspecified in file mode (silent STDOUT is resolved later)" do
-      cli = CLI.new(["-f", "log.txt"])
-      cli.null.should be_nil
-      cli.file?.should be_true
-    end
-
-    it "keeps --no-null explicit in file mode so teeing wins" do
-      cli = CLI.new(["-f", "log.txt", "--no-null"])
-      cli.null.should be_false
-      cli.file?.should be_true
-    end
-
-    it "parses the follow knobs" do
-      cli = CLI.new(["-f", "log.txt", "--from-start", "--poll", "50", "--pid", "42"])
-      cli.from_start?.should be_true
-      cli.poll_ms.should eq(50)
-      cli.pid.should eq(42)
-    end
-
-    it "rejects a non-positive --pid" do
-      expect_raises(ArgumentError, /--pid must be > 0/) { CLI.new(["-f", "log.txt", "--pid", "0"]) }
-    end
-
-    it "rejects a --poll below 1" do
-      expect_raises(ArgumentError, /--poll must be >= 1/) { CLI.new(["-f", "log.txt", "--poll", "0"]) }
-    end
-
-    it "rejects follow knobs without --file" do
-      expect_raises(ArgumentError, /--from-start requires --file/) { CLI.new(["--from-start"]) }
-      expect_raises(ArgumentError, /--pid requires --file/) { CLI.new(["--pid", "42"]) }
-      expect_raises(ArgumentError, /--poll requires --file/) { CLI.new(["--poll", "50"]) }
-    end
-
-    {% unless flag?(:linux) %}
-      it "rejects --watch-proc off Linux" do
-        expect_raises(ArgumentError, /only supported on Linux/) { CLI.new(["-f", "log.txt", "--watch-proc"]) }
+    describe "defaults" do
+      it "uses the documented defaults" do
+        cli = parse([] of String)
+        cli.lines.should eq(10)
+        cli.interval_ms.should eq(40)
+        cli.force?.should be_false
+        cli.sanitize?.should be_true
+        cli.final?.should be_false
+        cli.null.should be_nil
+        cli.file?.should be_false
+        cli.sort?.should be_false
+        cli.reverse?.should be_false
+        cli.human?.should be_false
+        cli.sort_by.should be_nil
+        cli.alt?.should be_false
+        cli.alt_mode.should eq(CLI::AltMode::Auto)
       end
-    {% end %}
-
-    it "defaults the sort predicates to false and sort_by to nil" do
-      cli = CLI.new([] of String)
-      cli.sort?.should be_false
-      cli.reverse?.should be_false
-      cli.human?.should be_false
-      cli.sort_by.should be_nil
     end
 
-    it "parses -s/--sort and -r/--reverse" do
-      CLI.new(["-s"]).sort?.should be_true
-      CLI.new(["--sort"]).sort?.should be_true
-      CLI.new(["-r"]).reverse?.should be_true
-      CLI.new(["--reverse"]).reverse?.should be_true
+    describe "line count" do
+      it "accepts -n, --lines, and the bare -N shorthand" do
+        parse(["-n", "5"]).lines.should eq(5)
+        parse(["--lines", "7"]).lines.should eq(7)
+        parse(["-20"]).lines.should eq(20)
+      end
+
+      it "does not confuse -n with the bare-number shorthand" do
+        parse(["-n", "3"]).lines.should eq(3)
+      end
+
+      it "rejects a line count below 1" do
+        expect_raises(Shell::AutoComplete::ParseError, /range/) { parse(["-n", "0"]) }
+      end
     end
 
-    it "does not confuse -r/-s with the bare-number shorthand" do
-      cli = CLI.new(["-r", "-s", "-5"])
-      cli.reverse?.should be_true
-      cli.sort?.should be_true
-      cli.lines.should eq(5)
+    describe "display flags" do
+      it "parses --force, --final, and --interval" do
+        cli = parse(["--force", "--final", "--interval", "100"])
+        cli.force?.should be_true
+        cli.final?.should be_true
+        cli.interval_ms.should eq(100)
+      end
+
+      it "negates --sanitize with --no-sanitize" do
+        parse(["--no-sanitize"]).sanitize?.should be_false
+        parse(["--sanitize"]).sanitize?.should be_true
+      end
     end
 
-    it "parses --sort-by INT into a Field selector and implies --sort" do
-      cli = CLI.new(["--sort-by", "2"])
-      cli.sort?.should be_true
-      selector = cli.sort_by
-      selector.should be_a(SortKey::Field)
-      selector.as(SortKey::Field).index.should eq(2)
+    describe "--null" do
+      it "is a tri-state resolved later by Runner" do
+        parse([] of String).null.should be_nil
+        parse(["--null"]).null.should be_true
+        parse(["--no-null"]).null.should be_false
+      end
+
+      it "lets the last of --null/--no-null win" do
+        parse(["--null", "--no-null"]).null.should be_false
+        parse(["--no-null", "--null"]).null.should be_true
+      end
     end
 
-    it "parses --sort-by /regex/ into a Pattern selector and implies --sort" do
-      cli = CLI.new(["--sort-by", "/(?<sort>\\d+)/"])
-      cli.sort?.should be_true
-      cli.sort_by.should be_a(SortKey::Pattern)
+    describe "--file" do
+      it "accepts -f/--file and reports file mode" do
+        parse(["-f", "log.txt"]).file.should eq(Path["log.txt"])
+        cli = parse(["--file", "log.txt"])
+        cli.file.should eq(Path["log.txt"])
+        cli.file?.should be_true
+      end
+
+      it "leaves --null unspecified in file mode (silent STDOUT is resolved later)" do
+        cli = parse(["-f", "log.txt"])
+        cli.null.should be_nil
+        cli.file?.should be_true
+      end
+
+      it "keeps --no-null explicit in file mode so teeing wins" do
+        parse(["-f", "log.txt", "--no-null"]).null.should be_false
+      end
+
+      it "parses the follow knobs" do
+        cli = parse(["-f", "log.txt", "--from-start", "--poll", "50", "--pid", "42"])
+        cli.from_start?.should be_true
+        cli.poll_ms.should eq(50)
+        cli.pid.should eq(42)
+      end
+
+      it "rejects a non-positive --pid or --poll" do
+        expect_raises(Shell::AutoComplete::ParseError, /range/) { parse(["-f", "log.txt", "--pid", "0"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /range/) { parse(["-f", "log.txt", "--poll", "0"]) }
+      end
+
+      it "rejects follow knobs without --file" do
+        expect_raises(Shell::AutoComplete::ParseError, /--from-start requires --file/) { parse(["--from-start"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /--pid requires --file/) { parse(["--pid", "42"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /--poll requires --file/) { parse(["--poll", "50"]) }
+      end
+
+      {% unless flag?(:linux) %}
+        it "rejects --watch-proc off Linux" do
+          expect_raises(Shell::AutoComplete::ParseError, /only supported on Linux/) do
+            parse(["-f", "log.txt", "--watch-proc"])
+          end
+        end
+      {% end %}
     end
 
-    it "sets --human and implies --sort" do
-      cli = CLI.new(["--human"])
-      cli.human?.should be_true
-      cli.sort?.should be_true
+    describe "sorting" do
+      it "parses -s/--sort and -r/--reverse" do
+        parse(["-s"]).sort?.should be_true
+        parse(["--sort"]).sort?.should be_true
+        parse(["-r"]).reverse?.should be_true
+        parse(["--reverse"]).reverse?.should be_true
+      end
+
+      it "does not confuse -r/-s with the bare-number shorthand" do
+        cli = parse(["-r", "-s", "-5"])
+        cli.reverse?.should be_true
+        cli.sort?.should be_true
+        cli.lines.should eq(5)
+      end
+
+      it "parses --sort-by INT into a Field selector and implies --sort" do
+        cli = parse(["--sort-by", "2"])
+        cli.sort?.should be_true
+        cli.sort_by.should be_a(SortKey::Field)
+        cli.sort_by.as(SortKey::Field).index.should eq(2)
+      end
+
+      it "parses --sort-by /regex/ into a Pattern selector and implies --sort" do
+        cli = parse(["--sort-by", "/(?<sort>\\d+)/"])
+        cli.sort?.should be_true
+        cli.sort_by.should be_a(SortKey::Pattern)
+      end
+
+      it "sets --human and implies --sort" do
+        cli = parse(["--human"])
+        cli.human?.should be_true
+        cli.sort?.should be_true
+      end
+
+      # A transform raises ArgumentError; `dispatch` converts it to a ParseError
+      # and reports it as `scroll: --sort-by: ...`.
+      it "rejects an invalid --sort-by" do
+        expect_raises(ArgumentError, /--sort-by: must be >= 1/) { parse(["--sort-by", "0"]) }
+        expect_raises(ArgumentError, /--sort-by: not an integer/) { parse(["--sort-by", "abc"]) }
+        expect_raises(ArgumentError, /--sort-by: invalid regex/) { parse(["--sort-by", "/(unclosed/"]) }
+      end
     end
 
-    it "rejects a --sort-by column below 1" do
-      expect_raises(ArgumentError, /must be >= 1/) { CLI.new(["--sort-by", "0"]) }
+    describe "alternate screen" do
+      it "enables auto mode with --alt" do
+        cli = parse(["--alt"])
+        cli.alt?.should be_true
+        cli.alt_mode.should eq(CLI::AltMode::Auto)
+      end
+
+      it "forces region mode with --alt-region" do
+        cli = parse(["--alt-region"])
+        cli.alt?.should be_true
+        cli.alt_mode.should eq(CLI::AltMode::Region)
+      end
+
+      it "forces full mode with --alt-full, still accepting -N" do
+        cli = parse(["--alt-full", "-n", "20"])
+        cli.alt?.should be_true
+        cli.alt_mode.should eq(CLI::AltMode::Full)
+        cli.lines.should eq(20)
+      end
+
+      it "rejects contradictory alt modes" do
+        expect_raises(Shell::AutoComplete::ParseError, /mutually exclusive/) do
+          parse(["--alt-region", "--alt-full"])
+        end
+      end
     end
 
-    it "rejects a non-integer, non-regex --sort-by" do
-      expect_raises(ArgumentError, /not an integer/) { CLI.new(["--sort-by", "abc"]) }
-    end
+    describe "errors" do
+      it "raises on an unknown option" do
+        expect_raises(Shell::AutoComplete::ParseError, /unknown flag/) { parse(["--nope"]) }
+      end
 
-    it "rejects an invalid --sort-by regex" do
-      expect_raises(ArgumentError, /invalid regex/) { CLI.new(["--sort-by", "/(unclosed/"]) }
+      it "raises on an unexpected positional argument" do
+        expect_raises(Shell::AutoComplete::ParseError, /positional/) { parse(["file.txt"]) }
+      end
     end
   end
 end

@@ -8,6 +8,10 @@ targets:
   scroll:
     main: src/main.cr
 
+dependencies:
+  shell-auto_complete:
+    github: plambert/shell-auto_complete.cr
+
 crystal: '>= 1.20.3'
 
 license: MIT

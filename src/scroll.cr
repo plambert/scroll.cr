@@ -15,11 +15,10 @@ module Scroll
   VERSION = {{ `shards version`.strip.stringify }}
   {% end %}
 
+  # `dispatch` handles --help, --version, the shell-completion install flag, and
+  # parse/validation errors (reported as `scroll: message`, exit 1). The bare -N
+  # shorthand is expanded first, since the parser has no numeric flag names.
   def self.run(args = ARGV.dup) : Nil
-    config = CLI.new(args)
-    Runner.new(config).run
-  rescue ex : ArgumentError
-    STDERR.puts "scroll: #{ex.message}"
-    exit 2
+    CLI.dispatch(CLI.expand_count_shorthand(args))
   end
 end
