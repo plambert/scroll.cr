@@ -33,10 +33,10 @@ module Scroll
     end
 
     flag lines : Int32 = DEFAULT_LINES, "--lines COUNT", "-n",
-      "Lines to show (default: 10)", range: 1.., complete_with: :complete_none
+      "Lines to show (default: 10)", range: 1..
 
     flag interval_ms : Int32 = DEFAULT_INTERVAL, "--interval MS",
-      "Minimum ms between redraws (default: 40)", range: 0.., complete_with: :complete_none
+      "Minimum ms between redraws (default: 40)", range: 0..
 
     flag force : Bool = false, "--force",
       "Draw the display even when STDERR is not a TTY"
@@ -52,12 +52,11 @@ module Scroll
     flag null : Bool?, "--null",
       "Consume input without copying it to STDOUT (--no-null forces the copy)"
 
-    # Typed as Path for the value semantics. The shard only consults a type's
-    # __arg_complete for positionals, not for flag values, so the filesystem
-    # completion is requested explicitly via complete_with:.
+    # Path-typed, so the generated completions delegate to the shell's own
+    # filesystem completion for this flag's value.
     flag file : Path?, "--file PATH", "-f",
       "Follow PATH like `tail -F` instead of reading STDIN (implies --null)",
-      group: "Following a file", complete_with: :complete_path
+      group: "Following a file"
 
     flag from_start : Bool = false, "--from-start",
       "Stream the whole existing file before following",
@@ -65,11 +64,11 @@ module Scroll
 
     flag poll_ms : Int32 = DEFAULT_POLL, "--poll MS",
       "Ms between polls while waiting for data (default: 250)",
-      group: "Following a file", range: 1.., complete_with: :complete_none
+      group: "Following a file", range: 1..
 
     flag pid : Int32?, "--pid PID",
       "Exit cleanly once process PID is gone",
-      group: "Following a file", range: 1.., complete_with: :complete_none
+      group: "Following a file", range: 1..
 
     flag watch_proc : Bool = false, "--watch-proc",
       "Exit once no process holds the file open for writing (Linux only)",
@@ -77,7 +76,7 @@ module Scroll
 
     flag watch_proc_timeout_s : Int32 = DEFAULT_WATCH_TIMEOUT, "--watch-proc-timeout SEC",
       "Idle seconds before --watch-proc exits (default: 10)",
-      group: "Following a file", range: 1.., complete_with: :complete_none
+      group: "Following a file", range: 1..
 
     flag sort : Bool = false, "--sort", "-s",
       "Show the top N of the whole stream, not the last N (STDOUT keeps input order)",
@@ -89,7 +88,7 @@ module Scroll
 
     flag sort_by : SortKey?, "--sort-by SPEC",
       "Sort key: a 1-based column number, or a /regex/ (implies --sort)",
-      group: "Sorting", transform_with: :transform_sort_key, complete_with: :complete_none
+      group: "Sorting", transform_with: :transform_sort_key
 
     flag human : Bool = false, "--human",
       "Compare keys as human numbers, e.g. 1k < 2M (implies --sort)",
@@ -187,20 +186,6 @@ module Scroll
       Runner.new(self).run
     end
 
-    # A value the shell cannot usefully guess (a count, a pid, a sort spec).
-    # Returning no candidates stops the parser falling back to offering flag
-    # names, which would otherwise complete `-n <TAB>` to `--lines`.
-    def self.complete_none(context : Shell::AutoComplete::CompletionContext) : Array(String)
-      [] of String
-    end
-
-    # Ask the shell to complete this flag's value with its own filesystem
-    # completion (it handles ~, trailing slashes, and colouring far better than
-    # we could enumerate here).
-    def self.complete_path(context : Shell::AutoComplete::CompletionContext) : Array(String)
-      [Shell::AutoComplete::Completion::Directive::FILES]
-    end
-
     # Parse a `--sort-by` SPEC into a SortKey. A fully slash-delimited `/.../`
     # value is a PCRE2 regex; anything else must be a 1-based integer column.
     def self.transform_sort_key(value : String) : SortKey
@@ -209,11 +194,11 @@ module Scroll
         begin
           SortKey::Pattern.new(Regex.new(inner))
         rescue ex : ArgumentError | Regex::Error
-          raise ArgumentError.new "--sort-by: invalid regex: #{ex.message}"
+          raise ArgumentError.new "invalid regex: #{ex.message}"
         end
       else
-        index = value.to_i? || raise ArgumentError.new "--sort-by: not an integer: #{value}"
-        raise ArgumentError.new "--sort-by: must be >= 1" if index < 1
+        index = value.to_i? || raise ArgumentError.new "not an integer: #{value}"
+        raise ArgumentError.new "must be >= 1" if index < 1
         SortKey::Field.new(index)
       end
     end

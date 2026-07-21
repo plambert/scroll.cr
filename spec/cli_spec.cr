@@ -150,12 +150,12 @@ module Scroll
         cli.sort?.should be_true
       end
 
-      # A transform raises ArgumentError; `dispatch` converts it to a ParseError
-      # and reports it as `scroll: --sort-by: ...`.
+      # The transform raises ArgumentError; the parser turns it into a ParseError
+      # carrying the flag name, so it reads as `scroll: --sort-by: ...`.
       it "rejects an invalid --sort-by" do
-        expect_raises(ArgumentError, /--sort-by: must be >= 1/) { parse(["--sort-by", "0"]) }
-        expect_raises(ArgumentError, /--sort-by: not an integer/) { parse(["--sort-by", "abc"]) }
-        expect_raises(ArgumentError, /--sort-by: invalid regex/) { parse(["--sort-by", "/(unclosed/"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /--sort-by: must be >= 1/) { parse(["--sort-by", "0"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /--sort-by: not an integer/) { parse(["--sort-by", "abc"]) }
+        expect_raises(Shell::AutoComplete::ParseError, /--sort-by: invalid regex/) { parse(["--sort-by", "/(unclosed/"]) }
       end
     end
 
