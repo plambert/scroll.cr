@@ -14,6 +14,10 @@ module Scroll
 
     record Chunk, buffer : Bytes, size : Int32, offset : Int64
 
+    # The live inline renderer, once render_loop has created it, so the signal /
+    # at_exit teardown can move the cursor below the region and show it.
+    @renderer : Renderer? = nil
+
     def initialize(@config : CLI)
       @suppress = Runner.suppress_stdout?(@config.null, @config.file?)
       @display = Runner.display_enabled?(@config.force?, @suppress, STDERR.tty?, STDOUT.tty?)
@@ -140,6 +144,7 @@ module Scroll
       ticking = Atomic(Bool).new(true)
       begin
         renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
+        @renderer = renderer
         tail = Tail.new(@config.lines)
         sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         ticks = Channel(Nil).new(1)
@@ -274,7 +279,15 @@ module Scroll
       if @config.alt?
         at_exit { AltRenderer.restore(STDERR) }
       else
-        at_exit { Renderer.restore(STDERR) }
+        # Move the cursor below the region and show it (a proper finish), so
+        # Ctrl-C / SIGTERM leave a clean terminal rather than the cursor mid-region.
+        at_exit do
+          if renderer = @renderer
+            renderer.finish
+          else
+            Renderer.restore(STDERR)
+          end
+        end
       end
       # Turn a termination signal into a normal exit so the at_exit hook restores
       # the cursor instead of leaving the terminal in a hidden-cursor state.

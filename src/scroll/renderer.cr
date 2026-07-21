@@ -14,8 +14,10 @@ module Scroll
     CLEAR_LINE  = "\e[2K"
 
     def initialize(@io : IO, @lines : Int32, @sanitize : Bool = true)
-      @max = 0    # largest height the region may reach (set in #start)
-      @height = 0 # rows currently reserved; grows toward @max as lines arrive
+      @max = 0      # largest height the region may reach (set in #start)
+      @height = 0   # rows currently reserved; grows toward @max as lines arrive
+      @done = false # guards #finish against running twice
+      @started = false
     end
 
     # Hide the cursor and record the ceiling for the region height. The region is
@@ -25,6 +27,7 @@ module Scroll
       rows, _ = Terminal.size
       @max = Math.min(@lines, rows)
       @max = 1 if @max < 1
+      @started = true
       @io << HIDE_CURSOR
       @io.flush
     end
@@ -78,15 +81,23 @@ module Scroll
     end
 
     # Move the cursor below the region and show it, so a following shell prompt
-    # appears after the display rather than on top of it.
+    # (or the shell after Ctrl-C) appears after the display rather than on top of
+    # it or wherever the cursor happened to rest. Idempotent and safe from an
+    # at_exit / signal handler: it runs at most once and swallows a dead terminal.
     def finish : Nil
-      return if @height < 1
+      return if @done
+      @done = true
+      return unless @started # never hid the cursor, nothing to restore
       @io << "\e[" << (@height - 1) << 'B' if @height > 1
-      @io << "\r\n" << SHOW_CURSOR
+      @io << "\r\n" if @height > 0 # leave the region on its own lines
+      @io << SHOW_CURSOR
       @io.flush
+    rescue IO::Error
+      # Terminal already gone; nothing to restore.
     end
 
-    # Restore the cursor unconditionally; safe to call from an at_exit hook.
+    # Restore the cursor unconditionally; safe to call from an at_exit hook when
+    # no renderer instance is available.
     def self.restore(io : IO) : Nil
       io << SHOW_CURSOR
       io.flush
