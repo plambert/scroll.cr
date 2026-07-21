@@ -146,6 +146,17 @@ module Scroll
     def initialize(@sort : Bool, @reverse : Bool, @human : Bool, @sort_by : SortKey?)
     end
 
+    # The comparable key for one line, exposed so `SortWindow` can track the
+    # top-N without re-implementing key extraction. `--reverse` is *not* baked in
+    # here — callers apply it to the comparison.
+    def key(line : String) : HumanKey
+      key_for line
+    end
+
+    def reverse? : Bool
+      @reverse
+    end
+
     # Reorder for display only. Returns the same array (identity) when no
     # ordering is requested, so the common path adds zero overhead.
     def order(lines : Array(String)) : Array(String)

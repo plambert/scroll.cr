@@ -22,6 +22,10 @@ module Scroll
       @suppress = Runner.suppress_stdout?(@config.null, @config.file?)
       @display = Runner.display_enabled?(@config.force?, @suppress, STDERR.tty?, STDOUT.tty?)
       @source = Runner.build_source(@config)
+      # --sort must see every line to keep a correct top-N, so the pump blocks for
+      # a pool buffer instead of dropping when it falls behind. STDOUT throughput
+      # is deliberately relaxed under --sort (it cannot skip lines anyway).
+      @may_drop = !@config.sort?
     end
 
     # STDIN by default; a followed file when --file is set.
@@ -128,6 +132,7 @@ module Scroll
       if buffer = try_receive free
         return buffer
       end
+      return free.receive unless @may_drop # --sort: wait for a buffer, never drop
       Fiber.yield
       try_receive free
     end
@@ -139,6 +144,7 @@ module Scroll
     # avoids the io_write-vs-select_timeout conflict path in the event loop.
     private def render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
       return alt_render_loop(free, filled, done) if @config.alt?
+      return sort_render_loop(free, filled, done) if @config.sort?
 
       # Assigned before the begin so it is guaranteed non-nil in the rescue.
       ticking = Atomic(Bool).new(true)
@@ -175,6 +181,49 @@ module Scroll
       rescue IO::Error
         # STDERR failed (terminal closed). Stop rendering, but keep draining so
         # the hot path never blocks on a full handoff channel, then release it.
+        ticking.set false
+        drain filled, free
+        done.send nil
+      end
+    end
+
+    # The --sort render loop. Same channel/ticker structure as render_loop, but a
+    # SortWindow keeps the top-N of the whole stream (not the last N received) and
+    # is already in display order, so it is drawn directly. The pump does not drop
+    # in this mode (see acquire_buffer), so the window sees every line.
+    private def sort_render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
+      ticking = Atomic(Bool).new(true)
+      begin
+        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
+        @renderer = renderer
+        sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
+        window = SortWindow.new(@config.lines, sorter)
+        ticks = Channel(Nil).new(1)
+        start_ticker(ticks, ticking)
+        dirty = false
+        renderer.start
+
+        loop do
+          select
+          when message = filled.receive
+            break if message.nil?
+            window.feed(message.buffer[0, message.size])
+            free.send message.buffer
+            dirty = true
+          when ticks.receive
+            if dirty
+              renderer.draw window.snapshot
+              dirty = false
+            end
+          end
+        end
+
+        ticking.set false
+        window.finalize(@config.final?)
+        renderer.draw window.snapshot
+        renderer.finish
+        done.send nil
+      rescue IO::Error
         ticking.set false
         drain filled, free
         done.send nil
