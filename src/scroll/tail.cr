@@ -55,14 +55,17 @@ module Scroll
       @line.write bytes[position..] if position < bytes.size
     end
 
-    # Promote a trailing newline-less line to a complete line, then reveal any
-    # partially-rebuilt segment. Call once at EOF when the caller wants the final
-    # unterminated line included.
-    def finalize : Nil
-      remainder = @line.to_slice
-      unless remainder.empty? || @skip_fragment
-        push String.new(remainder)
-        @line.clear
+    # Finish the stream at EOF. Always reveals any partially-rebuilt segment so
+    # the display ends on the freshest lines rather than a frozen stale window.
+    # When `include_trailing` is true (the --final option), a trailing line with
+    # no newline is also promoted to a complete line first.
+    def finalize(include_trailing : Bool = false) : Nil
+      if include_trailing
+        remainder = @line.to_slice
+        unless remainder.empty? || @skip_fragment
+          push String.new(remainder)
+          @line.clear
+        end
       end
       reveal_building unless @building.empty?
     end

@@ -59,20 +59,22 @@ module Scroll
       tail.snapshot.should_not contain("abc")
     end
 
-    it "includes a trailing newline-less line only after finalize" do
+    it "includes a trailing newline-less line only with finalize(true)" do
       tail = Tail.new(3)
       feed_chunk(tail, "1\n2\ntail", 0_i64)
       tail.snapshot.should eq(["1", "2"])
-      tail.finalize
+      tail.finalize # default: no trailing line
+      tail.snapshot.should eq(["1", "2"])
+      tail.finalize(true) # --final: promote the trailing line
       tail.snapshot.should eq(["1", "2", "tail"])
     end
 
-    it "reveals a partial rebuilt segment on finalize" do
+    it "reveals a partial rebuilt segment on finalize regardless of --final" do
       tail = Tail.new(5)
       feed_chunk(tail, "1\n2\n3\n4\n5\n", 0_i64)
       feed_chunk(tail, "TAIL\nb\nc\n", 100_i64) # segment [b,c] never fills to 5
       tail.snapshot.should eq(["1", "2", "3", "4", "5"])
-      tail.finalize
+      tail.finalize # even without --final, show freshest
       tail.snapshot.should eq(["b", "c"])
     end
 

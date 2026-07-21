@@ -163,7 +163,7 @@ module Scroll
         end
 
         ticking.set false
-        tail.finalize if @config.final?
+        tail.finalize(@config.final?)
         renderer.draw sorter.order(tail.snapshot)
         renderer.finish
         done.send nil
