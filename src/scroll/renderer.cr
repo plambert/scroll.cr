@@ -12,7 +12,7 @@ module Scroll
   class Renderer
     HIDE_CURSOR = "\e[?25l"
     SHOW_CURSOR = "\e[?25h"
-    CLEAR_LINE  = "\e[2K"
+    CLEAR_EOL   = "\e[K"
 
     # `progress` reserves the bottom row of the region for the progress line.
     # `size` overrides the terminal size query (rows, cols); it exists so specs
@@ -60,7 +60,6 @@ module Scroll
       last = @height - 1
       sequence = String.build do |str|
         @height.times do |row|
-          str << CLEAR_LINE
           if progress && row == last
             # Written as it came: the progress line is ours, already fitted to
             # the width and sanitized, and it carries its own color escapes.
@@ -69,6 +68,10 @@ module Scroll
             content_index = row - pad
             str << prepare(visible[content_index], row_width) if content_index >= 0
           end
+          # Each row is overwritten and then cleared to its end, rather than
+          # cleared first: a blank row between the two writes is a frame of
+          # flicker on a stream fast enough to redraw every tick.
+          str << CLEAR_EOL
           str << "\r\n" unless row == last
         end
         # Return to the first region row without emitting a newline past the last.
@@ -89,7 +92,7 @@ module Scroll
       last = @height - 1
       sequence = String.build do |str|
         str << "\e[" << last << 'B' if last > 0
-        str << CLEAR_LINE << text << '\r'
+        str << '\r' << text << CLEAR_EOL << '\r'
         str << "\e[" << last << 'A' if last > 0
       end
       @io << sequence

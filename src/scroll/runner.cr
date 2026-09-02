@@ -190,6 +190,7 @@ module Scroll
         renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, progress: progress?)
         @renderer = renderer
         meter = build_meter
+        last_progress = nil.as(String?)
         tail = Tail.new(@config.lines)
         sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         ticks = Channel(Nil).new(1)
@@ -206,12 +207,16 @@ module Scroll
             dirty = true
           when ticks.receive
             if dirty
-              renderer.draw sorter.order(tail.snapshot), progress_line(meter, renderer.width)
+              painted = progress_line(meter, renderer.width)
+              renderer.draw sorter.order(tail.snapshot), painted
+              last_progress = painted
               dirty = false
-            elsif line = progress_line(meter, renderer.width)
+            elsif (line = progress_line(meter, renderer.width)) && line != last_progress
               # No new lines, but the rates, the ETA, and a scrolling name still
-              # move, so the bottom row alone is repainted.
+              # move, so the bottom row alone is repainted — and only when it has
+              # something new to say.
               renderer.draw_progress line
+              last_progress = line
             end
           end
         end
@@ -240,6 +245,7 @@ module Scroll
         renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, progress: progress?)
         @renderer = renderer
         meter = build_meter
+        last_progress = nil.as(String?)
         sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         window = SortWindow.new(@config.lines, sorter)
         ticks = Channel(Nil).new(1)
@@ -256,10 +262,13 @@ module Scroll
             dirty = true
           when ticks.receive
             if dirty
-              renderer.draw window.snapshot, progress_line(meter, renderer.width)
+              painted = progress_line(meter, renderer.width)
+              renderer.draw window.snapshot, painted
+              last_progress = painted
               dirty = false
-            elsif line = progress_line(meter, renderer.width)
+            elsif (line = progress_line(meter, renderer.width)) && line != last_progress
               renderer.draw_progress line
+              last_progress = line
             end
           end
         end
@@ -286,6 +295,7 @@ module Scroll
         renderer = AltRenderer.new(STDERR, sanitize: @config.sanitize?,
           progress: progress?, leave: @config.leave?)
         meter = build_meter
+        last_progress = nil.as(String?)
         ticks = Channel(Nil).new(1)
         start_ticker(ticks, ticking)
         dirty = false
@@ -304,8 +314,9 @@ module Scroll
               renderer.flush
               dirty = false
             end
-            if line = progress_line(meter, renderer.width)
+            if (line = progress_line(meter, renderer.width)) && line != last_progress
               renderer.draw_progress line
+              last_progress = line
             end
           end
         end

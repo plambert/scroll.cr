@@ -29,7 +29,7 @@ module Scroll
         renderer.start
         io.clear
         renderer.draw_progress("50% done")
-        io.to_s.should eq("\e7\e[24;1H\e[2K50% done\e8")
+        io.to_s.should eq("\e7\e[24;1H50% done\e[K\e8")
       end
 
       # The progress line is composed to fit and carries its own color escapes,
@@ -54,14 +54,16 @@ module Scroll
     end
 
     describe "#feed and #flush" do
-      it "writes each complete line terminated by CRLF" do
+      # A terminating newline would leave the cursor on a blank bottom row, which
+      # flickers once a frame under a fast stream.
+      it "separates lines with CRLF, leaving the newest one on the cursor row" do
         io = IO::Memory.new
         renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb\nc\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("a\r\nb\r\nc\r\n")
+        io.to_s.should eq("a\r\nb\r\nc")
       end
 
       it "withholds a trailing partial line until its newline arrives" do
@@ -71,11 +73,11 @@ module Scroll
         io.clear
         feed_chunk(renderer, "a\nb\npartial", 0_i64)
         renderer.flush
-        io.to_s.should eq("a\r\nb\r\n")
+        io.to_s.should eq("a\r\nb")
         io.clear
         feed_chunk(renderer, "-end\n", 11_i64)
         renderer.flush
-        io.to_s.should eq("partial-end\r\n")
+        io.to_s.should eq("\r\npartial-end")
       end
 
       it "does nothing when there is nothing pending" do
@@ -94,7 +96,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "abcdefghijklmno\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("abcdefghi\r\n") # 9 chars (cols - 1), then CRLF
+        io.to_s.should eq("abcdefghi") # 9 chars (cols - 1)
       end
 
       it "strips control bytes unless sanitize is off" do
@@ -104,7 +106,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "a\eb\tc\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("ab c\r\n") # ESC dropped, tab -> space
+        io.to_s.should eq("ab c") # ESC dropped, tab -> space
       end
 
       it "keeps control bytes when sanitize is off" do
@@ -114,7 +116,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "a\tb\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("a\tb\r\n")
+        io.to_s.should eq("a\tb")
       end
 
       it "emits only the last screenful when more than that is pending" do
@@ -124,7 +126,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "1\n2\n3\n4\n5\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("3\r\n4\r\n5\r\n") # 3 rows; earlier lines scroll off
+        io.to_s.should eq("3\r\n4\r\n5") # 3 rows; earlier lines scroll off
       end
     end
 
@@ -139,7 +141,7 @@ module Scroll
         # of a dropped line and must be discarded up to the newline.
         feed_chunk(renderer, "gment\nthree\n", 20_i64)
         renderer.flush
-        io.to_s.should eq("one\r\ntwo\r\nthree\r\n")
+        io.to_s.should eq("one\r\ntwo\r\nthree")
       end
     end
 
@@ -152,7 +154,7 @@ module Scroll
         feed_chunk(renderer, "a\n", 0_i64)
         renderer.notify_resize
         renderer.flush
-        io.to_s.should eq("\e[2J\e[1;23r\e[23;1Ha\r\n")
+        io.to_s.should eq("\e[2J\e[1;23r\e[23;1Ha")
       end
 
       it "emits no region escapes without a progress line" do
@@ -163,7 +165,7 @@ module Scroll
         feed_chunk(renderer, "a\n", 0_i64)
         renderer.notify_resize
         renderer.flush
-        io.to_s.should eq("a\r\n")
+        io.to_s.should eq("a")
       end
     end
 
@@ -185,7 +187,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "1\n2\n3\n4\n", 0_i64)
         renderer.finish(false)
-        io.to_s.should eq("1\r\n2\r\n3\r\n4\r\n\e[?25h\e[r\e[?1049l")
+        io.to_s.should eq("1\r\n2\r\n3\r\n4\e[?25h\e[r\e[?1049l")
       end
 
       it "echoes the lines that were visible under --leave" do
@@ -195,7 +197,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "1\n2\n3\n", 0_i64)
         renderer.finish(false)
-        io.to_s.should eq("1\r\n2\r\n3\r\n\e[?25h\e[r\e[?1049l1\r\n2\r\n3\r\n")
+        io.to_s.should eq("1\r\n2\r\n3\e[?25h\e[r\e[?1049l1\r\n2\r\n3\r\n")
       end
 
       it "echoes no more than a screenful" do
@@ -215,7 +217,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)
         renderer.finish(true)
-        io.to_s.should eq("a\r\nb\r\n\e[?25h\e[r\e[?1049la\r\nb\r\n")
+        io.to_s.should eq("a\r\nb\e[?25h\e[r\e[?1049la\r\nb\r\n")
       end
 
       it "omits a trailing newline-less line when final is not set" do
@@ -225,7 +227,7 @@ module Scroll
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)
         renderer.finish(false)
-        io.to_s.should eq("a\r\n\e[?25h\e[r\e[?1049la\r\n")
+        io.to_s.should eq("a\e[?25h\e[r\e[?1049la\r\n")
       end
     end
   end

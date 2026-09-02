@@ -20,7 +20,7 @@ module Scroll
     LEAVE_ALT    = "\e[?1049l"
     RESET_REGION = "\e[r"
     CLEAR_HOME   = "\e[2J\e[H"
-    CLEAR_LINE   = "\e[2K"
+    CLEAR_EOL    = "\e[K"
     SAVE_CURSOR  = "\e7"
     LOAD_CURSOR  = "\e8"
 
@@ -40,6 +40,7 @@ module Scroll
       @recent = Deque(String).new  # ring of the visible lines, for --leave
       @expected_offset = nil.as(Int64?)
       @skip_fragment = false
+      @wrote_line = false # whether a line already occupies the cursor's row
       @resized = Atomic(Bool).new(false)
     end
 
@@ -67,8 +68,9 @@ module Scroll
     def draw_progress(text : String) : Nil
       return unless @progress
       apply_resize if @resized.get
-      @io << SAVE_CURSOR << "\e[" << @rows << ";1H" << CLEAR_LINE
-      @io << text << LOAD_CURSOR
+      # Written over the row and then cleared to its end, rather than clearing
+      # first: an empty row between the two writes is a frame of flicker.
+      @io << SAVE_CURSOR << "\e[" << @rows << ";1H" << text << CLEAR_EOL << LOAD_CURSOR
       @io.flush
     end
 
@@ -103,6 +105,12 @@ module Scroll
     # first if a resize was signalled. The pending buffer is capped to the screen
     # height: scrolling through more than one screenful between frames is
     # pointless, since the earlier lines would instantly scroll off.
+    #
+    # Lines are *separated* by CRLF rather than terminated by one. A terminating
+    # newline scrolls the last line up and leaves the cursor on a blank row, so
+    # under a fast stream the bottom row alternates between blank and filled once
+    # a frame, which reads as a flicker. Separating instead leaves the newest line
+    # sitting on that row until the next one pushes it up.
     def flush : Nil
       return if @pending.empty?
       apply_resize if @resized.get
@@ -111,7 +119,11 @@ module Scroll
       excess.times { @pending.shift } if excess > 0
 
       width = line_width
-      @pending.each { |line| @io << prepare(line, width) << "\r\n" }
+      @pending.each do |line|
+        @io << "\r\n" if @wrote_line
+        @io << prepare(line, width)
+        @wrote_line = true
+      end
       @pending.clear
       @io.flush
     end
@@ -152,6 +164,7 @@ module Scroll
 
     private def emit_region : Nil
       @io << "\e[2J\e[1;" << @height << 'r' << "\e[" << @height << ";1H"
+      @wrote_line = false # the screen is blank again
     end
 
     private def apply_resize : Nil

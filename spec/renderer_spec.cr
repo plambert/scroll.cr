@@ -12,8 +12,8 @@ module Scroll
         io.to_s.should contain("a")
         io.to_s.should contain("b")
         # Last row painted, and no newline after it.
-        io.to_s.should contain("\e[2K50% done")
-        io.to_s.should_not contain("50% done\r\n")
+        io.to_s.should contain("50% done\e[K")
+        io.to_s.should_not contain("50% done\e[K\r\n")
       end
 
       it "reserves the bottom row, so the tail keeps to the rows above it" do
@@ -23,8 +23,8 @@ module Scroll
         io.clear
         renderer.draw((1..40).map(&.to_s), "bar")
         # 23 tail rows plus the bar, on a 24-row terminal.
-        io.to_s.scan("\e[2K").size.should eq(24)
-        io.to_s.should contain("\e[2Kbar")
+        io.to_s.scan("\e[K").size.should eq(24)
+        io.to_s.should contain("bar\e[K")
       end
 
       # The progress line is composed to fit and carries its own color escapes,
@@ -47,7 +47,7 @@ module Scroll
         renderer.draw(["a", "b"], "first")
         io.clear
         renderer.draw_progress("second")
-        io.to_s.should eq("\e[2B\e[2Ksecond\r\e[2A")
+        io.to_s.should eq("\e[2B\rsecond\e[K\r\e[2A")
       end
 
       it "opens a row for the bar when nothing has been drawn yet" do
@@ -56,7 +56,7 @@ module Scroll
         renderer.start
         io.clear
         renderer.draw_progress("only")
-        io.to_s.should contain("\e[2Konly")
+        io.to_s.should contain("only\e[K")
       end
 
       it "does nothing when the progress line is off" do
