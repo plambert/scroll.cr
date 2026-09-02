@@ -239,6 +239,22 @@ module Scroll
         line.should contain("eta 2s")
       end
 
+      # The pair already says how many lines have gone by; the count beside it is
+      # the one the pair does not carry.
+      it "shows bytes beside a line pair, and lines beside a byte pair" do
+        start = Time.instant
+        by_lines = Progress.new(Progress::Total.new(lines: 200_i64), nil, start)
+        line = by_lines.render(90, 2_048_i64, 100_i64, start + 2.seconds)
+        line.should contain("100/200 ln")
+        line.should contain(" 2.0K ")
+        line.should_not contain(" 100 ln ")
+
+        by_bytes = Progress.new(Progress::Total.new(bytes: 4_096_i64), nil, start)
+        line = by_bytes.render(90, 2_048_i64, 100_i64, start + 2.seconds)
+        line.should contain("2.0K/4.0K")
+        line.should contain("100 ln")
+      end
+
       it "never exceeds the width it is given" do
         start = Time.instant
         meter = Progress.new(Progress::Total.new(bytes: 4_096_i64), "a-long-enough-name.log", start)

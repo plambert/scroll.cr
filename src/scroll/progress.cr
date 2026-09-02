@@ -182,7 +182,7 @@ module Scroll
         fields << Field.new(pair(bytes, lines), 1)
         fields << Field.new("eta #{eta(bytes, lines, byte_rate, line_rate)}", 2)
         fields << Field.new("#{Progress.human_bytes(byte_rate.to_i64)}/s", 4)
-        fields << Field.new("#{Progress.human_count(lines)} ln", 5)
+        fields << Field.new(counterpart(bytes, lines), 5)
         fields << Field.new("#{Progress.human_count(line_rate.to_i64)} ln/s", 6)
       else
         fields << Field.new(Progress.human_bytes(bytes), 0)
@@ -431,6 +431,17 @@ module Scroll
       return "0s" if remaining <= 0
       return "--" if rate <= 0
       Progress.duration((remaining / rate).seconds)
+    end
+
+    # The count the pair does not already carry: lines beside a byte total, bytes
+    # beside a line total. Repeating the quantity the pair measures would print
+    # the same number twice.
+    private def counterpart(bytes : Int64, lines : Int64) : String
+      if @total.bytes
+        "#{Progress.human_count(lines)} ln"
+      else
+        Progress.human_bytes(bytes)
+      end
     end
 
     # "1.2M/2.6M" against a byte total, "12K/40K ln" against a line total.
