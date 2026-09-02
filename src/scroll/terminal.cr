@@ -40,18 +40,6 @@ module Scroll
       end
     end
 
-    # Whether to assume the terminal honors DECSTBM (the scrolling region used by
-    # --alt region mode). DECSTBM is original VT100 and is implemented by every
-    # terminal that also supports the alternate screen, so a tty probe or a
-    # terminfo dependency would only re-derive "assume yes" at real cost. Instead,
-    # deny only the terminals that plainly are not VT: $TERM unset, empty, or
-    # "dumb". A false positive is recoverable with --alt-full.
-    def self.scroll_region_supported? : Bool
-      term = ENV["TERM"]?
-      return false if term.nil? || term.empty? || term == "dumb"
-      true
-    end
-
     private def self.env_int(name : String, default : Int32) : Int32
       if value = ENV[name]?
         parsed = value.to_i?

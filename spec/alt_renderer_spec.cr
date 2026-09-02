@@ -8,43 +8,16 @@ end
 module Scroll
   describe AltRenderer do
     describe "#start" do
-      it "enters the alt screen and hides the cursor in full mode" do
+      it "enters the alt screen, hides the cursor, and takes the whole screen" do
         io = IO::Memory.new
-        AltRenderer.new(io, 5, region: false, size: {24, 80}).start
+        AltRenderer.new(io, size: {24, 80}).start
         io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[H")
       end
 
-      it "sets a DECSTBM band of min(N, rows) and parks the cursor in region mode" do
+      # The band is what keeps the bar's row from scrolling away with the output.
+      it "sets a band of every row but the last with a progress line" do
         io = IO::Memory.new
-        AltRenderer.new(io, 5, region: true, size: {24, 80}).start
-        io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[1;5r\e[5;1H")
-      end
-
-      it "clamps the band to the terminal height when N exceeds it" do
-        io = IO::Memory.new
-        AltRenderer.new(io, 100, region: true, size: {24, 80}).start
-        io.to_s.should end_with("\e[2J\e[1;24r\e[24;1H")
-      end
-    end
-
-    describe "#start with a progress line" do
-      it "keeps the bottom row out of the band in region mode" do
-        io = IO::Memory.new
-        AltRenderer.new(io, 5, region: true, progress: true, size: {24, 80}).start
-        io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[1;5r\e[5;1H")
-      end
-
-      it "clamps the band to one row short of the terminal in region mode" do
-        io = IO::Memory.new
-        AltRenderer.new(io, 100, region: true, progress: true, size: {24, 80}).start
-        io.to_s.should end_with("\e[2J\e[1;23r\e[23;1H")
-      end
-
-      # Full mode normally sets no region at all; a progress line needs one, or
-      # the bottom row scrolls away with everything else.
-      it "sets a band of every row but the last in full mode" do
-        io = IO::Memory.new
-        AltRenderer.new(io, 5, region: false, progress: true, size: {24, 80}).start
+        AltRenderer.new(io, progress: true, size: {24, 80}).start
         io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[1;23r\e[23;1H")
       end
     end
@@ -52,25 +25,27 @@ module Scroll
     describe "#draw_progress" do
       it "paints the bottom row and restores the cursor" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, progress: true, size: {24, 80})
+        renderer = AltRenderer.new(io, progress: true, size: {24, 80})
         renderer.start
         io.clear
         renderer.draw_progress("50% done")
         io.to_s.should eq("\e7\e[24;1H\e[2K50% done\e8")
       end
 
-      it "truncates the text to the terminal width" do
+      # The progress line is composed to fit and carries its own color escapes,
+      # so it goes out as it came rather than through the sanitizer.
+      it "writes the text through untouched" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, progress: true, size: {24, 10})
+        renderer = AltRenderer.new(io, progress: true, size: {24, 80})
         renderer.start
         io.clear
-        renderer.draw_progress("0123456789abcdef")
-        io.to_s.should contain("\e[2K012345678\e8")
+        renderer.draw_progress("\e[42m \e[0m 50%")
+        io.to_s.should contain("\e[42m \e[0m 50%")
       end
 
       it "does nothing when the progress line is off" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         renderer.draw_progress("ignored")
@@ -81,7 +56,7 @@ module Scroll
     describe "#feed and #flush" do
       it "writes each complete line terminated by CRLF" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb\nc\n", 0_i64)
@@ -91,7 +66,7 @@ module Scroll
 
       it "withholds a trailing partial line until its newline arrives" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb\npartial", 0_i64)
@@ -105,7 +80,7 @@ module Scroll
 
       it "does nothing when there is nothing pending" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         renderer.flush
@@ -114,7 +89,7 @@ module Scroll
 
       it "truncates lines to one short of the terminal width" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 10})
+        renderer = AltRenderer.new(io, size: {24, 10})
         renderer.start
         io.clear
         feed_chunk(renderer, "abcdefghijklmno\n", 0_i64)
@@ -124,7 +99,7 @@ module Scroll
 
       it "strips control bytes unless sanitize is off" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\eb\tc\n", 0_i64)
@@ -134,7 +109,7 @@ module Scroll
 
       it "keeps control bytes when sanitize is off" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, sanitize: false, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, sanitize: false, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\tb\n", 0_i64)
@@ -142,21 +117,21 @@ module Scroll
         io.to_s.should eq("a\tb\r\n")
       end
 
-      it "emits only the last `height` lines when more than a bandful is pending" do
+      it "emits only the last screenful when more than that is pending" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 3, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {3, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "1\n2\n3\n4\n5\n", 0_i64)
         renderer.flush
-        io.to_s.should eq("3\r\n4\r\n5\r\n") # band is 3 rows; earlier lines scroll off
+        io.to_s.should eq("3\r\n4\r\n5\r\n") # 3 rows; earlier lines scroll off
       end
     end
 
     describe "gap handling" do
       it "skips the post-gap fragment up to the next newline" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "one\ntwo\n", 0_i64) # ends at offset 8
@@ -169,20 +144,20 @@ module Scroll
     end
 
     describe "#notify_resize" do
-      it "re-applies the region on the next flush in region mode" do
+      it "re-applies the band on the next flush when a progress line holds a row" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, progress: true, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\n", 0_i64)
         renderer.notify_resize
         renderer.flush
-        io.to_s.should eq("\e[2J\e[1;5r\e[5;1Ha\r\n")
+        io.to_s.should eq("\e[2J\e[1;23r\e[23;1Ha\r\n")
       end
 
-      it "does not emit region escapes in full mode" do
+      it "emits no region escapes without a progress line" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 5, region: false, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\n", 0_i64)
@@ -198,29 +173,44 @@ module Scroll
         AltRenderer.restore(io)
         io.to_s.should eq("\e[?25h\e[r\e[?1049l")
       end
-
-      it "is a safe no-op sequence even when start never ran" do
-        io = IO::Memory.new
-        AltRenderer.restore(io)
-        io.to_s.should eq("\e[?25h\e[r\e[?1049l")
-      end
     end
 
     describe "#finish" do
-      it "drains, restores the screen, then echoes the recent tail" do
+      # The alt screen vanishes by default: the run leaves the terminal as it
+      # found it.
+      it "drains and restores the screen, leaving nothing behind" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 3, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "1\n2\n3\n4\n", 0_i64)
         renderer.finish(false)
-        # last-flush of the band, then restore, then the echo of the last 3 lines.
-        io.to_s.should eq("2\r\n3\r\n4\r\n\e[?25h\e[r\e[?1049l2\r\n3\r\n4\r\n")
+        io.to_s.should eq("1\r\n2\r\n3\r\n4\r\n\e[?25h\e[r\e[?1049l")
+      end
+
+      it "echoes the lines that were visible under --leave" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
+        renderer.start
+        io.clear
+        feed_chunk(renderer, "1\n2\n3\n", 0_i64)
+        renderer.finish(false)
+        io.to_s.should eq("1\r\n2\r\n3\r\n\e[?25h\e[r\e[?1049l1\r\n2\r\n3\r\n")
+      end
+
+      it "echoes no more than a screenful" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, leave: true, size: {2, 80})
+        renderer.start
+        io.clear
+        feed_chunk(renderer, "1\n2\n3\n4\n", 0_i64)
+        renderer.finish(false)
+        io.to_s.should end_with("\e[?1049l3\r\n4\r\n")
       end
 
       it "promotes a trailing newline-less line when final is set" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 3, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)
@@ -230,7 +220,7 @@ module Scroll
 
       it "omits a trailing newline-less line when final is not set" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, 3, region: true, size: {24, 80})
+        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)

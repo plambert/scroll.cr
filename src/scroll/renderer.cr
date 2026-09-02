@@ -62,7 +62,9 @@ module Scroll
         @height.times do |row|
           str << CLEAR_LINE
           if progress && row == last
-            str << prepare(progress, row_width)
+            # Written as it came: the progress line is ours, already fitted to
+            # the width and sanitized, and it carries its own color escapes.
+            str << progress
           else
             content_index = row - pad
             str << prepare(visible[content_index], row_width) if content_index >= 0
@@ -87,7 +89,7 @@ module Scroll
       last = @height - 1
       sequence = String.build do |str|
         str << "\e[" << last << 'B' if last > 0
-        str << CLEAR_LINE << prepare(text, width) << '\r'
+        str << CLEAR_LINE << text << '\r'
         str << "\e[" << last << 'A' if last > 0
       end
       @io << sequence

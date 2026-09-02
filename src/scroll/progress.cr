@@ -9,8 +9,29 @@ module Scroll
   # Counting happens on the hot path (see `Counters`), so the numbers are exact
   # even when the display drops chunks; the meter itself only formats.
   class Progress
-    FILL  = '█'
-    EMPTY = '░'
+    # Which glyphs the bar is drawn from. Unicode adds eighth-of-a-column steps,
+    # so the bar moves seven times per column instead of once.
+    enum Charset
+      Unicode
+      Ascii
+    end
+
+    FILL    = '█'
+    EMPTY   = '░'
+    EIGHTHS = %w[▏ ▎ ▍ ▌ ▋ ▊ ▉] # 1/8 .. 7/8 of a column
+
+    ASCII_FILL  = '#'
+    ASCII_EMPTY = '-'
+
+    # SGR bodies. The bar leans on background colors so the filled part and the
+    # track meet with no gap between glyphs.
+    FILLED_STYLE    = "42"     # green background
+    TRACK_STYLE     = "100"    # bright black background
+    PARTIAL_STYLE   = "32;100" # green on the track, for the leading cell
+    PERCENT_STYLE   = "1"      # bold
+    SEPARATOR_STYLE = "2"      # dim
+    NAME_STYLE      = "36"     # cyan
+    RESET           = "\e[0m"
 
     # Columns the bar wants before the name starts stealing from it, and the
     # floor it will not go below while a name is present.
@@ -86,6 +107,15 @@ module Scroll
     # terminal is too narrow. Rank 0 is never dropped.
     private record Field, text : String, rank : Int32
 
+    # A painted run: the columns it occupies, and the SGR body to wrap it in when
+    # color is on. `text` may already carry escapes (the bar does), which is why
+    # the width is carried rather than measured.
+    private record Piece, text : String, width : Int32, style : String? = nil do
+      def self.plain(text : String, style : String? = nil) : Piece
+        new(text, text.size, style)
+      end
+    end
+
     # A byte size: an integer, or a decimal with a 1024-based suffix. Case
     # insensitive, and an "i" and/or "b" may trail the suffix letter (1.5k,
     # 1.5K, 1.5KB, 1.5KiB are the same size).
@@ -132,7 +162,8 @@ module Scroll
 
     @name : String?
 
-    def initialize(@total : Total, name : String? = nil, @started_at : Time::Instant = Time.instant)
+    def initialize(@total : Total, name : String? = nil, @started_at : Time::Instant = Time.instant,
+                   @color : Bool = false, @charset : Charset = Charset::Unicode)
       @name = name.try { |text| Progress.sanitize(text) }
       @samples = Deque(Sample).new
       @samples.push Sample.new(@started_at, 0_i64, 0_i64)
@@ -184,7 +215,7 @@ module Scroll
           name = nil
           next
         end
-        return fields.map(&.text).join(' ')[0, width]
+        return paint([Piece.plain(fields.map(&.text).join(separator)[0, width])])
       end
     end
 
@@ -199,46 +230,128 @@ module Scroll
       true
     end
 
-    # Columns left for the bar and the name once the fields and the single-space
-    # gaps between everything are accounted for.
+    # The percentage leads, the bar follows it, and the remaining fields are
+    # joined by the separator; a name goes last. Everything is spaced by one
+    # column, so this is what the bar and the name have left to share.
     private def space_for(width : Int32, fields : Array(Field), bar : Bool, name : String?) : Int32
-      slots = fields.size + (bar ? 1 : 0) + (name ? 1 : 0)
-      gaps = slots > 1 ? slots - 1 : 0
-      width - fields.sum(&.text.size) - gaps
+      lead, rest = lead_and_rest fields, bar
+      segments = 0
+      segments += 1 if lead
+      segments += 1 if bar
+      segments += 1 unless rest.empty?
+      segments += 1 if name
+      gaps = segments > 1 ? segments - 1 : 0
+      width - (lead.try(&.text.size) || 0) - joined_width(rest) - gaps
+    end
+
+    # With a bar, the first field (the percentage) sits ahead of it and the rest
+    # follow; with no bar every field is in the run after it.
+    private def lead_and_rest(fields : Array(Field), bar : Bool) : {Field?, Array(Field)}
+      return {nil, fields} unless bar
+      {fields.first?, fields.size > 1 ? fields.skip(1) : [] of Field}
+    end
+
+    private def joined_width(fields : Array(Field)) : Int32
+      return 0 if fields.empty?
+      fields.sum(&.text.size) + separator.size * (fields.size - 1)
     end
 
     # Hand `space` columns to the bar and the name. The name is shown whole while
     # that leaves the bar at least PREFERRED_BAR columns; past that the bar keeps
     # shrinking to MINIMUM_BAR and the name takes what is left, scrolling if it
     # still does not fit.
-    private def assemble(fields : Array(Field), bar : Bool, done : Float64, name : String?, space : Int32, elapsed : Time::Span) : String
-      bar_width = 0
-      name_width = 0
-
+    private def split_space(bar : Bool, name : String?, space : Int32) : {Int32, Int32}
       if bar && name
         bar_width = Math.max(MINIMUM_BAR, space - name.size)
         bar_width = space - 1 if bar_width > space - 1
         bar_width = 1 if bar_width < 1
-        name_width = space - bar_width
+        {bar_width, space - bar_width}
       elsif bar
-        bar_width = space
+        {space, 0}
       elsif name
-        name_width = space
+        {0, space}
+      else
+        {0, 0}
+      end
+    end
+
+    private def assemble(fields : Array(Field), bar : Bool, done : Float64, name : String?, space : Int32, elapsed : Time::Span) : String
+      bar_width, name_width = split_space bar, name, space
+      lead, rest = lead_and_rest fields, bar
+
+      # One column between the percentage, the bar, the stats run, and the name;
+      # inside the run the separator carries its own spacing.
+      segments = [] of Array(Piece)
+      segments << [Piece.plain(lead.text, PERCENT_STYLE)] if lead
+      segments << [Piece.new(Progress.bar(bar_width, done, @color, @charset), bar_width)] if bar_width > 0
+      unless rest.empty?
+        run = [] of Piece
+        rest.each_with_index do |field, index|
+          run << Piece.plain(separator, SEPARATOR_STYLE) if index > 0
+          run << Piece.plain(field.text)
+        end
+        segments << run
+      end
+      if name && name_width > 0
+        segments << [Piece.plain(Progress.scroll(name, name_width, elapsed), NAME_STYLE)]
       end
 
-      parts = [] of String
-      parts << fields.first.text
-      parts << Progress.bar(bar_width, done) if bar_width > 0
-      fields.skip(1).each { |field| parts << field.text }
-      parts << Progress.scroll(name, name_width, elapsed) if name && name_width > 0
-      parts.join ' '
+      pieces = [] of Piece
+      segments.each_with_index do |segment, index|
+        pieces << Piece.plain(" ") if index > 0
+        pieces.concat segment
+      end
+      paint pieces
+    end
+
+    # Wrap each piece in its style when color is on; otherwise join the text.
+    private def paint(pieces : Array(Piece)) : String
+      String.build do |str|
+        pieces.each do |piece|
+          style = piece.style
+          if @color && style
+            str << "\e[" << style << 'm' << piece.text << RESET
+          else
+            str << piece.text
+          end
+        end
+      end
+    end
+
+    private def separator : String
+      @charset.ascii? ? " | " : " · "
     end
 
     # A bar `width` columns wide, `done` of it filled.
-    def self.bar(width : Int32, done : Float64) : String
+    #
+    # With color the filled part and the track are background colors, so they
+    # meet with no gap, and a unicode charset gives the leading cell one of the
+    # eighth-blocks for sub-column resolution. Without color there is no
+    # background to lean on and the bar falls back to glyphs.
+    def self.bar(width : Int32, done : Float64, color : Bool = false, charset : Charset = Charset::Unicode) : String
       return "" if width < 1
-      filled = (width * done.clamp(0.0, 1.0)).round.to_i
-      (FILL.to_s * filled) + (EMPTY.to_s * (width - filled))
+      exact = width * done.clamp(0.0, 1.0)
+      full = exact.floor.to_i
+      full = width if full > width
+      eighths = ((exact - full) * 8).to_i.clamp(0, 7)
+      partial = charset.unicode? && full < width && eighths > 0 ? 1 : 0
+
+      if color
+        String.build do |str|
+          str << "\e[" << FILLED_STYLE << 'm' << " " * full << RESET if full > 0
+          str << "\e[" << PARTIAL_STYLE << 'm' << EIGHTHS[eighths - 1] << RESET if partial > 0
+          rest = width - full - partial
+          str << "\e[" << TRACK_STYLE << 'm' << " " * rest << RESET if rest > 0
+        end
+      elsif charset.ascii?
+        (ASCII_FILL.to_s * full) + (ASCII_EMPTY.to_s * (width - full))
+      else
+        String.build do |str|
+          str << FILL.to_s * full
+          str << EIGHTHS[eighths - 1] if partial > 0
+          str << EMPTY.to_s * (width - full - partial)
+        end
+      end
     end
 
     # The window of `name` visible in a field `width` columns wide. A name that

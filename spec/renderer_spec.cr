@@ -27,14 +27,15 @@ module Scroll
         io.to_s.should contain("\e[2Kbar")
       end
 
-      it "truncates the progress text to the terminal width" do
+      # The progress line is composed to fit and carries its own color escapes,
+      # so it goes out as it came rather than through the sanitizer.
+      it "writes the progress text through untouched" do
         io = IO::Memory.new
-        renderer = Renderer.new(io, 2, progress: true, size: {24, 10})
+        renderer = Renderer.new(io, 2, progress: true, size: {24, 80})
         renderer.start
         io.clear
-        renderer.draw(["a"], "0123456789abcdef")
-        io.to_s.should contain("012345678")
-        io.to_s.should_not contain("0123456789")
+        renderer.draw(["a"], "\e[42m \e[0m 50%")
+        io.to_s.should contain("\e[42m \e[0m 50%")
       end
     end
 

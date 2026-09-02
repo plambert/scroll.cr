@@ -70,6 +70,94 @@ module Scroll
       end
     end
 
+    # A follow that opened at the very end left the display empty until the file
+    # was written to, which reads as a hang; priming shows the lines already
+    # there, the way `tail -F` does.
+    it "opens on the last prime_lines lines of an existing file" do
+      with_temp_path do |path|
+        File.write(path, "1\n2\n3\n4\n5\n")
+        source = FileSource.new(path, POLL, prime_lines: 2)
+        String.new(follow(source, 4)).should eq("4\n5\n")
+        source.close
+      end
+    end
+
+    it "opens on the whole file when it holds fewer lines than that" do
+      with_temp_path do |path|
+        File.write(path, "1\n2\n")
+        source = FileSource.new(path, POLL, prime_lines: 10)
+        String.new(follow(source, 4)).should eq("1\n2\n")
+        source.close
+      end
+    end
+
+    it "primes without a trailing newline, and keeps following after" do
+      with_temp_path do |path|
+        File.write(path, "1\n2\n3")
+        source = FileSource.new(path, POLL, prime_lines: 2)
+        spawn do
+          sleep 30.milliseconds
+          File.open(path, "a", &.print("\n4\n"))
+        end
+        String.new(follow(source, 6)).should eq("2\n3\n4\n")
+        source.close
+      end
+    end
+
+    it "opens at the end when no lines are asked for" do
+      with_temp_path do |path|
+        File.write(path, "1\n2\n3\n")
+        source = FileSource.new(path, POLL)
+        spawn do
+          sleep 30.milliseconds
+          File.open(path, "a", &.print("4\n"))
+        end
+        String.new(follow(source, 2)).should eq("4\n")
+        source.close
+      end
+    end
+
+    describe ".tail_offset" do
+      it "finds the start of the last N lines" do
+        with_temp_path do |path|
+          File.write(path, "aaa\nbb\nc\n")
+          File.open(path) do |file|
+            FileSource.tail_offset(file, 1).should eq(7) # "c\n"
+            FileSource.tail_offset(file, 2).should eq(4) # "bb\nc\n"
+            FileSource.tail_offset(file, 3).should eq(0)
+            FileSource.tail_offset(file, 9).should eq(0)
+          end
+        end
+      end
+
+      it "counts the last line when the file does not end in a newline" do
+        with_temp_path do |path|
+          File.write(path, "aaa\nbb\nc")
+          File.open(path) { |file| FileSource.tail_offset(file, 1).should eq(7) }
+        end
+      end
+
+      it "scans back across more than one block" do
+        with_temp_path do |path|
+          File.write(path, (1..5000).map { |number| "line #{number}" }.join("\n") + "\n")
+          File.open(path) do |file|
+            offset = FileSource.tail_offset(file, 2)
+            file.pos = offset
+            file.gets_to_end.should eq("line 4999\nline 5000\n")
+          end
+        end
+      end
+
+      it "stays at the end when asked for no lines, and at 0 for an empty file" do
+        with_temp_path do |path|
+          File.write(path, "a\nb\n")
+          File.open(path) { |file| FileSource.tail_offset(file, 0).should eq(4) }
+          File.write(path, "")
+          File.open(path) { |file| FileSource.tail_offset(file, 5).should eq(0) }
+        end
+      end
+    end
+
     it "streams existing content first with from_start" do
       with_temp_path do |path|
         File.write(path, "existing\n")

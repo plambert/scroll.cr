@@ -2,16 +2,18 @@ require "shell-auto_complete"
 
 module Scroll
   HELP_FOOTER = <<-HELP_FOOTER
-    A bare -N is shorthand for --lines N (e.g. -20 means --lines 20).
+    A bare -N is shorthand for --lines N (e.g. -20 means --lines 20); -c and -C
+    are shorthand for --color on and --color off.
 
-    On the alternate screen, region mode honors -N; full mode ignores it and uses
-    the whole screen. Auto picks region when DECSTBM looks supported.
+    --fullscreen draws on the alternate screen, which uses the whole screen and
+    ignores -N. It vanishes on exit unless --leave echoes what was visible.
 
     Examples:
       long-running-build | scroll -20 | tee build.log
       noisy-job | scroll --null                     watch the tail, discard output
       scroll -f app.log --pid $(pgrep -f app)       follow a file until app exits
       du -sh * | scroll --null --sort --human       keep the largest on screen
+      tar cf - src | scroll --size 4G --name src    watch progress with a label
     HELP_FOOTER
 
   # The command-line surface. `Shell::AutoComplete` derives the parser, --help,
@@ -27,12 +29,11 @@ module Scroll
     DEFAULT_POLL          = 250
     DEFAULT_WATCH_TIMEOUT =  10
 
-    # Which alternate-screen rendering to use when --alt is on. Auto picks Region
-    # when DECSTBM is judged supported, else Full.
-    enum AltMode
+    # When to colorize the progress line. Auto follows the display.
+    enum ColorMode
       Auto
-      Region
-      Full
+      On
+      Off
     end
 
     flag lines : Int32 = DEFAULT_LINES, "--lines COUNT", "-n",
@@ -58,7 +59,7 @@ module Scroll
     # Path-typed, so the generated completions delegate to the shell's own
     # filesystem completion for this flag's value.
     flag file : Path?, "--file PATH", "-f",
-      "Follow PATH like `tail -F` instead of reading STDIN (implies --null)",
+      "Follow PATH like `tail -F`, starting with its last -N lines (implies --null)",
       group: "Following a file"
 
     flag from_start : Bool = false, "--from-start",
@@ -121,17 +122,21 @@ module Scroll
       "Label to show in the progress line; implies --progress",
       group: "Progress"
 
-    # One flag, three shortcut switches. `--alt` picks Auto, `--alt-region` forces
-    # Region, `--alt-full` forces Full; the bare per-case switches the enum would
-    # otherwise generate (--auto/--region/--full) are too generic to expose, so
-    # `except:` suppresses them and `aliases:` names the three we want. They feed a
-    # single value stream, so contradictory spellings resolve last-wins instead of
-    # needing a mutual-exclusion check. Left nil, the alternate screen is off.
-    flag alt_screen : AltMode?, "--alt-mode",
-      "Draw on the alternate screen: faster, and it vanishes on exit",
-      group: "Alternate screen",
-      shortcut_flags: {except:  [:auto, :region, :full],
-                       aliases: {alt: :auto, alt_region: :region, alt_full: :full}}
+    flag color : ColorMode = ColorMode::Auto, "--color WHEN",
+      "Colorize the progress line (-c is --color on, -C is --color off)",
+      group: "Progress"
+
+    flag progress_charset : Progress::Charset = Progress::Charset::Unicode, "--progress-charset SET",
+      "Bar glyphs: unicode draws eighth-of-a-column steps, ascii stays in ASCII",
+      group: "Progress"
+
+    flag fullscreen : Bool = false, "--fullscreen",
+      "Draw on the alternate screen: faster, uses the whole screen, ignores -N",
+      group: "Alternate screen"
+
+    flag leave : Bool = false, "--leave",
+      "On exit, echo the lines that were on the alternate screen",
+      group: "Alternate screen", negatable: false
 
     # Bool predicates, so the rest of the codebase reads `config.force?` rather
     # than the plain property the macro generates.
@@ -184,13 +189,27 @@ module Scroll
       @name.try &.to_s
     end
 
-    # Any of the --alt spellings turns the alternate screen on.
-    def alt? : Bool
-      !@alt_screen.nil?
+    def fullscreen? : Bool
+      @fullscreen
     end
 
-    def alt_mode : AltMode
-      @alt_screen || AltMode::Auto
+    def leave? : Bool
+      @leave
+    end
+
+    # Whether the progress line is colorized, for the terminal this run has.
+    def color? : Bool
+      CLI.color_enabled?(@color, STDERR.tty?, ENV["NO_COLOR"]?.presence, ENV["TERM"]?)
+    end
+
+    # Auto follows the display: color when STDERR is a terminal, unless NO_COLOR
+    # is set or $TERM says the terminal cannot show it.
+    def self.color_enabled?(mode : ColorMode, stderr_tty : Bool, no_color : String?, term : String?) : Bool
+      case mode
+      in .on?   then true
+      in .off?  then false
+      in .auto? then stderr_tty && no_color.nil? && !term.nil? && !term.empty? && term != "dumb"
+      end
     end
 
     # Run the cross-flag rules after parsing, before `run`. As a hook they cannot
@@ -213,6 +232,8 @@ module Scroll
           raise Shell::AutoComplete::ParseError.new "--watch-proc-timeout requires --file"
         end
       end
+
+      raise Shell::AutoComplete::ParseError.new "--leave requires --fullscreen" if leave? && !fullscreen?
 
       if path = @size_file
         raise Shell::AutoComplete::ParseError.new "--file-size: not a file: #{path}" unless File.file?(path)
@@ -252,9 +273,9 @@ module Scroll
       Progress.parse_size value
     end
 
-    # Translate a bare `-N` token (e.g. -20) into `--lines N`, leaving every other
-    # token untouched. Applied before dispatch, since the parser has no notion of
-    # a numeric flag name.
+    # Translate the shorthand tokens the parser has no notion of: a bare `-N`
+    # (e.g. -20) into `--lines N`, and -c/-C into `--color on`/`--color off`.
+    # Everything else is passed through untouched.
     #
     # A completion callback (`__complete <cword> <words...>`, emitted by the
     # generated bash/zsh/fish wrappers) is passed through untouched. Rewriting one
@@ -265,10 +286,11 @@ module Scroll
 
       result = [] of String
       opts.each do |token|
-        if match = token.match(/\A-(\d+)\z/)
-          result << "--lines" << match[1]
-        else
-          result << token
+        case token
+        when /\A-(\d+)\z/ then result << "--lines" << $~[1]
+        when "-c"         then result << "--color" << "on"
+        when "-C"         then result << "--color" << "off"
+        else                   result << token
         end
       end
       result

@@ -58,6 +58,9 @@ module Scroll
           path.to_s,
           config.poll_ms.milliseconds,
           from_start: config.from_start?,
+          # Open on the lines already in the file, so a follow does not start on
+          # an empty display. The alternate screen shows a screenful, not -N.
+          prime_lines: config.fullscreen? ? Terminal.size[0] : config.lines,
           pid: config.pid,
           watch_proc: config.watch_proc?,
           watch_proc_timeout: config.watch_proc_timeout_s.seconds,
@@ -178,7 +181,7 @@ module Scroll
     # tick. Keeping the timer machinery on a fiber that does no blocking IO
     # avoids the io_write-vs-select_timeout conflict path in the event loop.
     private def render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
-      return alt_render_loop(free, filled, done) if @config.alt?
+      return alt_render_loop(free, filled, done) if @config.fullscreen?
       return sort_render_loop(free, filled, done) if @config.sort?
 
       # Assigned before the begin so it is guaranteed non-nil in the rescue.
@@ -280,8 +283,8 @@ module Scroll
     private def alt_render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
       ticking = Atomic(Bool).new(true)
       begin
-        renderer = AltRenderer.new(STDERR, @config.lines, sanitize: @config.sanitize?,
-          region: alt_region?, progress: progress?)
+        renderer = AltRenderer.new(STDERR, sanitize: @config.sanitize?,
+          progress: progress?, leave: @config.leave?)
         meter = build_meter
         ticks = Channel(Nil).new(1)
         start_ticker(ticks, ticking)
@@ -326,7 +329,8 @@ module Scroll
     # A meter for this run, or nil when the progress line is off.
     private def build_meter : Progress?
       return unless progress?
-      Progress.new(@progress_total, @config.name_text)
+      Progress.new(@progress_total, @config.name_text,
+        color: @config.color?, charset: @config.progress_charset)
     end
 
     # The progress line at the renderer's width, or nil when it is off.
@@ -334,16 +338,6 @@ module Scroll
       counters = @counters
       return unless meter && counters
       meter.render(width, counters.bytes, counters.lines)
-    end
-
-    # Resolve the concrete alt mode. Auto assumes region mode unless $TERM marks
-    # a non-VT terminal.
-    private def alt_region? : Bool
-      case @config.alt_mode
-      in .region? then true
-      in .full?   then false
-      in .auto?   then Terminal.scroll_region_supported?
-      end
     end
 
     private def start_ticker(ticks : Channel(Nil), running : Atomic(Bool)) : Nil
@@ -387,10 +381,10 @@ module Scroll
     end
 
     private def install_display_teardown : Nil
-      # --alt teardown must also leave the alt screen and reset the scroll region;
+      # Fullscreen teardown must also leave the alt screen and reset the scroll region;
       # the inline path only needs the cursor shown. Both restores are idempotent
       # and safe even if the display never started.
-      if @config.alt?
+      if @config.fullscreen?
         at_exit { AltRenderer.restore(STDERR) }
       else
         # Move the cursor below the region and show it (a proper finish), so

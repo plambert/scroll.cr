@@ -34,18 +34,23 @@ module Scroll
       Missing   # name is gone; wait for it to reappear
     end
 
+    NEWLINE    = '\n'.ord.to_u8
+    SCAN_BLOCK = 8192
+
     @file : File? = nil
-    # True until the first successful open consumes it. Only the first open of a
-    # file that already existed at construction seeks to end; every later open
-    # (appear-after-start, rotation, truncation) starts at offset 0 because that
-    # content is by definition new.
-    @seek_to_end_on_open : Bool
+    # How many existing lines to show before following, so a follow does not open
+    # on an empty display; nil under --from-start, which streams the whole file.
+    # Only the first open of a file that already existed at construction consumes
+    # it; every later open (appear-after-start, rotation, truncation) starts at
+    # offset 0 because that content is by definition new.
+    @prime_lines : Int32?
 
     def initialize(
       path : String,
       poll : Time::Span,
       *,
       from_start : Bool = false,
+      prime_lines : Int32 = 0,
       @pid : Int32? = nil,
       @watch_proc : Bool = false,
       watch_proc_timeout : Time::Span = 10.seconds,
@@ -53,7 +58,7 @@ module Scroll
       @path = path
       @poll = poll
       @watch_proc_timeout = watch_proc_timeout
-      @seek_to_end_on_open = !from_start && File.exists?(path)
+      @prime_lines = from_start || !File.exists?(path) ? nil : prime_lines
       @last_writer_seen = Time.instant
     end
 
@@ -93,9 +98,9 @@ module Scroll
     # Open @path if it is present. Returns true when a file was opened.
     private def open_file : Bool
       file = File.new(@path)
-      if @seek_to_end_on_open
-        file.pos = file.size
-        @seek_to_end_on_open = false
+      if lines = @prime_lines
+        file.pos = FileSource.tail_offset(file, lines)
+        @prime_lines = nil
       end
       @file = file
       true
@@ -103,6 +108,38 @@ module Scroll
       false
     rescue File::Error
       false
+    end
+
+    # Byte offset of the start of the last `lines` complete lines, or 0 when the
+    # file holds fewer than that. Scanned backwards in blocks, so priming from a
+    # huge log costs a read or two rather than a pass over the whole file.
+    def self.tail_offset(file : File, lines : Int32) : Int64
+      size = file.size.to_i64
+      return size if lines <= 0 || size == 0
+
+      # A newline at the end terminates the last line rather than starting one.
+      file.pos = size - 1
+      final = Bytes.new(1)
+      file.read_fully(final)
+      position = final[0] == NEWLINE ? size - 1 : size
+
+      found = 0
+      buffer = Bytes.new(SCAN_BLOCK)
+      while position > 0
+        length = Math.min(SCAN_BLOCK.to_i64, position).to_i32
+        position -= length
+        file.pos = position
+        file.read_fully(buffer[0, length])
+        index = length - 1
+        while index >= 0
+          if buffer[index] == NEWLINE
+            found += 1
+            return position + index + 1 if found == lines
+          end
+          index -= 1
+        end
+      end
+      0_i64
     end
 
     private def reopen : Nil

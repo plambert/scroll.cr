@@ -1,19 +1,15 @@
 module Scroll
   # Draws the tail on the terminal's alternate screen buffer. Unlike Renderer,
   # which repaints N rows every frame, this appends complete lines and lets the
-  # terminal do the scrolling. On exit the alt screen is torn down and the user's
-  # original screen and scrollback are restored untouched.
+  # terminal do the scrolling, which is what makes it keep up with a much faster
+  # stream. The whole screen is used: `-N` bounds the inline display, not this
+  # one.
   #
-  # One class covers two modes, chosen by `@region`:
-  #
-  # * region mode (`@region` true): a DEC scrolling region (DECSTBM) of
-  #   `min(N, rows)` rows is set inside the alt screen; only that band scrolls.
-  #   Honors `-N`. A SIGWINCH must re-apply the region on resize.
-  # * full mode (`@region` false): the whole alt screen scrolls naturally,
-  #   ignoring `-N`. Tee-like. Used when DECSTBM is judged unsupported.
-  #
-  # With `--progress` the bottom screen row is held back from both modes for the
-  # progress line, which means full mode sets a band too.
+  # A scrolling region (DECSTBM) is set only with `--progress`, to hold the
+  # bottom row back for the progress line; without it the screen scrolls
+  # naturally. On exit the alt screen is torn down and the original screen and
+  # scrollback are restored untouched — `--leave` then echoes the lines that were
+  # visible onto the main screen, so the run leaves a tail behind.
   #
   # STDOUT is never touched by any of this; the display lives entirely on the
   # STDERR IO handed to the constructor.
@@ -30,35 +26,30 @@ module Scroll
 
     NEWLINE = '\n'.ord.to_u8
 
-    getter? region : Bool
-
     # `size` overrides the terminal size query (rows, cols); it exists so specs
     # can drive the renderer against an `IO::Memory`, which has no fd. In normal
     # use it is nil and the size is read from the terminal on `start` and on
     # every resize.
-    def initialize(@io : IO, @lines : Int32, @sanitize : Bool = true,
-                   region : Bool = true, @progress : Bool = false,
-                   @size : {Int32, Int32}? = nil)
-      @region = region
+    def initialize(@io : IO, @sanitize : Bool = true, @progress : Bool = false,
+                   @leave : Bool = false, @size : {Int32, Int32}? = nil)
       @rows = 0
       @cols = 0
-      @height = 0 # rows in the scroll band (region) or on screen (full)
+      @height = 0 # rows the stream may scroll through
       @line = IO::Memory.new
       @pending = Deque(String).new # complete lines awaiting the next flush
-      @recent = Deque(String).new  # ring of the last @lines for the finish echo
+      @recent = Deque(String).new  # ring of the visible lines, for --leave
       @expected_offset = nil.as(Int64?)
       @skip_fragment = false
       @resized = Atomic(Bool).new(false)
     end
 
-    # Enter the alt screen, hide the cursor, and (region mode) set the DECSTBM
-    # band and park the cursor at its bottom-left so appended lines scroll up.
-    # Full mode with a progress line still needs a band: without one the bottom
-    # row scrolls away with everything else, taking the bar with it.
+    # Enter the alt screen and hide the cursor. With a progress line, a DECSTBM
+    # band covers every row but the last and the cursor parks at its bottom, so
+    # appended lines scroll within it and the bar below stays put.
     def start : Nil
       read_size
       @io << ENTER_ALT << HIDE_CURSOR
-      if region? || @progress
+      if @progress
         emit_region
       else
         @io << CLEAR_HOME
@@ -77,7 +68,7 @@ module Scroll
       return unless @progress
       apply_resize if @resized.get
       @io << SAVE_CURSOR << "\e[" << @rows << ";1H" << CLEAR_LINE
-      @io << prepare(text, line_width) << LOAD_CURSOR
+      @io << text << LOAD_CURSOR
       @io.flush
     end
 
@@ -109,9 +100,9 @@ module Scroll
     end
 
     # Write the pending lines, letting the terminal scroll. Re-applies the region
-    # first if a resize was signalled. The pending buffer is capped to the band
-    # height: scrolling through more than one bandful between frames is pointless,
-    # since the earlier lines would instantly scroll off.
+    # first if a resize was signalled. The pending buffer is capped to the screen
+    # height: scrolling through more than one screenful between frames is
+    # pointless, since the earlier lines would instantly scroll off.
     def flush : Nil
       return if @pending.empty?
       apply_resize if @resized.get
@@ -126,9 +117,9 @@ module Scroll
     end
 
     # On EOF: optionally promote a trailing newline-less line, drain the buffer,
-    # tear down the alt screen, then echo the last `min(N, rows)` lines to the
-    # restored main screen so the run leaves a visible tail behind (the alt screen
-    # otherwise vanishes completely, like `less`).
+    # then tear down the alt screen. Under `--leave` the lines that were on the
+    # screen are echoed onto the restored main screen; otherwise the run vanishes
+    # completely, like `less`.
     def finish(final : Bool) : Nil
       if final
         remainder = @line.to_slice
@@ -139,7 +130,7 @@ module Scroll
       end
       flush
       self.class.restore(@io)
-      echo_recent
+      echo_recent if @leave
     end
 
     # Flag a terminal resize. Called from the SIGWINCH trap; it only flips the
@@ -152,7 +143,6 @@ module Scroll
     # Show the cursor, reset any scroll region, and leave the alt screen. Safe to
     # call from an at_exit hook even if `start` never ran: `\e[?1049l` is a no-op
     # when the alt screen was never entered, and `\e[r` a no-op with no region.
-    # Serves both modes.
     def self.restore(io : IO) : Nil
       io << SHOW_CURSOR << RESET_REGION << LEAVE_ALT
       io.flush
@@ -167,13 +157,12 @@ module Scroll
     private def apply_resize : Nil
       @resized.set(false)
       read_size
-      emit_region if region? || @progress
+      emit_region if @progress
     end
 
     private def read_size : Nil
       @rows, @cols = @size || Terminal.size
-      usable = @progress ? @rows - 1 : @rows # the bottom row holds the bar
-      @height = region? ? Math.min(@lines, usable) : usable
+      @height = @progress ? @rows - 1 : @rows # the bottom row holds the bar
       @height = 1 if @height < 1
     end
 
@@ -188,15 +177,17 @@ module Scroll
 
     private def push(line : String) : Nil
       @pending.push line
+      return unless @leave
       @recent.push line
-      @recent.shift if @recent.size > @lines
+      while @recent.size > @height
+        @recent.shift
+      end
     end
 
     private def echo_recent : Nil
       return if @recent.empty?
-      count = Math.min(@recent.size, Math.min(@lines, @rows))
       width = line_width
-      @recent.to_a.last(count).each { |line| @io << prepare(line, width) << "\r\n" }
+      @recent.each { |line| @io << prepare(line, width) << "\r\n" }
       @io.flush
     rescue IO::Error
       # Main screen already gone; nothing to echo.

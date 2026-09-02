@@ -1,5 +1,10 @@
 require "./spec_helper"
 
+# The columns a rendered line occupies, with the color escapes taken back out.
+private def visible(text : String) : String
+  text.gsub(/\e\[[0-9;]*m/, "")
+end
+
 module Scroll
   describe Progress do
     describe ".parse_size" do
@@ -130,6 +135,42 @@ module Scroll
       end
     end
 
+    describe ".bar with color" do
+      # Background colors mean the filled part and the track meet with no gap,
+      # which drawing foreground blocks cannot manage.
+      it "paints the filled part and the track as backgrounds" do
+        bar = Progress.bar(10, 0.5, color: true)
+        bar.should contain("\e[#{Progress::FILLED_STYLE}m     \e[0m")
+        bar.should contain("\e[#{Progress::TRACK_STYLE}m     \e[0m")
+        bar.should_not contain(Progress::EMPTY)
+        visible(bar).size.should eq(10)
+      end
+
+      it "gives the leading cell an eighth-block for sub-column resolution" do
+        bar = Progress.bar(8, 0.5 + 1.0 / 16, color: true) # 4 and a half columns
+        bar.should contain("\e[#{Progress::PARTIAL_STYLE}m▌\e[0m")
+        visible(bar).size.should eq(8)
+      end
+
+      it "stays in ASCII under that charset, still without a gap" do
+        bar = Progress.bar(8, 0.5 + 1.0 / 16, color: true, charset: Progress::Charset::Ascii)
+        Progress::EIGHTHS.each { |glyph| bar.should_not contain(glyph) }
+        visible(bar).size.should eq(8)
+      end
+    end
+
+    describe ".bar without color" do
+      it "falls back to glyphs, with an eighth-block for the partial column" do
+        Progress.bar(4, 0.5).should eq("██░░")
+        Progress.bar(8, 0.5 + 1.0 / 16).should eq("████▌░░░")
+      end
+
+      it "uses ASCII glyphs under that charset" do
+        Progress.bar(4, 0.5, charset: Progress::Charset::Ascii).should eq("##--")
+        Progress.bar(4, 1.0, charset: Progress::Charset::Ascii).should eq("####")
+      end
+    end
+
     describe ".scroll" do
       it "shows a name that fits whole" do
         Progress.scroll("build.log", 20, 0.seconds).should eq("build.log")
@@ -177,7 +218,7 @@ module Scroll
         start = Time.instant
         meter = Progress.new(Progress::Total.new, nil, start)
         line = meter.render(80, 2_048_i64, 100_i64, start + 2.seconds)
-        line.should eq("2.0K 100 ln 1.0K/s 50 ln/s")
+        line.should eq("2.0K · 100 ln · 1.0K/s · 50 ln/s")
       end
 
       it "adds a percentage, a bar, and an ETA when the size is known" do
@@ -258,6 +299,31 @@ module Scroll
         line = meter.render(80, 1_024_i64, 10_i64, start + 10.seconds)
         line.should contain("0B/s")
         line.should contain("0 ln/s")
+      end
+
+      it "colors the name apart from the rest of the line" do
+        start = Time.instant
+        meter = Progress.new(Progress::Total.new(bytes: 4_096_i64), "build.log", start, color: true)
+        line = meter.render(120, 2_048_i64, 100_i64, start + 1.second)
+        line.should contain("\e[#{Progress::NAME_STYLE}mbuild.log\e[0m")
+        line.should contain("\e[#{Progress::PERCENT_STYLE}m")
+        line.should contain("\e[#{Progress::SEPARATOR_STYLE}m")
+      end
+
+      it "counts only the visible columns when color is on" do
+        start = Time.instant
+        meter = Progress.new(Progress::Total.new(bytes: 4_096_i64), "build.log", start, color: true)
+        (20..120).each do |width|
+          visible(meter.render(width, 2_048_i64, 100_i64, start + 1.second)).size.should be <= width
+        end
+      end
+
+      it "separates the stats with the charset's separator" do
+        start = Time.instant
+        unicode = Progress.new(Progress::Total.new, nil, start)
+        ascii = Progress.new(Progress::Total.new, nil, start, charset: Progress::Charset::Ascii)
+        unicode.render(80, 2_048_i64, 100_i64, start + 2.seconds).should contain(" · ")
+        ascii.render(80, 2_048_i64, 100_i64, start + 2.seconds).should contain(" | ")
       end
 
       it "is empty with no room at all" do

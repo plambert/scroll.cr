@@ -31,8 +31,10 @@ module Scroll
         cli.reverse?.should be_false
         cli.human?.should be_false
         cli.sort_by.should be_nil
-        cli.alt?.should be_false
-        cli.alt_mode.should eq(CLI::AltMode::Auto)
+        cli.fullscreen?.should be_false
+        cli.leave?.should be_false
+        cli.progress_charset.should eq(Progress::Charset::Unicode)
+        cli.color.should eq(CLI::ColorMode::Auto)
       end
     end
 
@@ -168,36 +170,65 @@ module Scroll
     end
 
     describe "alternate screen" do
-      it "enables auto mode with --alt" do
-        cli = parse(["--alt"])
-        cli.alt?.should be_true
-        cli.alt_mode.should eq(CLI::AltMode::Auto)
+      it "draws on the alternate screen with --fullscreen" do
+        parse(["--fullscreen"]).fullscreen?.should be_true
       end
 
-      it "forces region mode with --alt-region" do
-        cli = parse(["--alt-region"])
-        cli.alt?.should be_true
-        cli.alt_mode.should eq(CLI::AltMode::Region)
+      it "takes the negation back to the inline display" do
+        parse(["--fullscreen", "--no-fullscreen"]).fullscreen?.should be_false
       end
 
-      it "forces full mode with --alt-full, still accepting -N" do
-        cli = parse(["--alt-full", "-n", "20"])
-        cli.alt?.should be_true
-        cli.alt_mode.should eq(CLI::AltMode::Full)
-        cli.lines.should eq(20)
+      it "leaves the visible lines behind with --leave" do
+        cli = parse(["--fullscreen", "--leave"])
+        cli.leave?.should be_true
       end
 
-      it "names the mode directly with --alt-mode" do
-        cli = parse(["--alt-mode", "full"])
-        cli.alt?.should be_true
-        cli.alt_mode.should eq(CLI::AltMode::Full)
+      # --leave only means anything to a display that is torn down on exit.
+      it "rejects --leave without --fullscreen" do
+        expect_raises(Shell::AutoComplete::ParseError, /--leave requires --fullscreen/) do
+          parse(["--leave"])
+        end
+      end
+    end
+
+    describe "color" do
+      it "reads --color as a mode" do
+        parse(["--color", "on"]).color.should eq(CLI::ColorMode::On)
+        parse(["--color", "off"]).color.should eq(CLI::ColorMode::Off)
+        parse(["--color", "auto"]).color.should eq(CLI::ColorMode::Auto)
       end
 
-      # The three switches feed one value stream, so contradictory spellings
-      # resolve last-wins rather than raising.
-      it "resolves contradictory alt modes last-wins" do
-        parse(["--alt-region", "--alt-full"]).alt_mode.should eq(CLI::AltMode::Full)
-        parse(["--alt-full", "--alt-region"]).alt_mode.should eq(CLI::AltMode::Region)
+      it "takes -c and -C as shorthand for on and off" do
+        parse(["-c"]).color.should eq(CLI::ColorMode::On)
+        parse(["-C"]).color.should eq(CLI::ColorMode::Off)
+      end
+
+      it "resolves the shorthand last-wins, as one value stream" do
+        parse(["-c", "-C"]).color.should eq(CLI::ColorMode::Off)
+        parse(["-C", "--color", "on"]).color.should eq(CLI::ColorMode::On)
+      end
+
+      it "obeys an explicit mode whatever the terminal is" do
+        CLI.color_enabled?(CLI::ColorMode::On, false, "1", nil).should be_true
+        CLI.color_enabled?(CLI::ColorMode::Off, true, nil, "xterm").should be_false
+      end
+
+      # Auto follows the display, and stands down for NO_COLOR or a terminal
+      # that cannot show it.
+      it "colors automatically only on a capable terminal" do
+        CLI.color_enabled?(CLI::ColorMode::Auto, true, nil, "xterm-256color").should be_true
+        CLI.color_enabled?(CLI::ColorMode::Auto, false, nil, "xterm").should be_false
+        CLI.color_enabled?(CLI::ColorMode::Auto, true, "1", "xterm").should be_false
+        CLI.color_enabled?(CLI::ColorMode::Auto, true, nil, "dumb").should be_false
+        CLI.color_enabled?(CLI::ColorMode::Auto, true, nil, "").should be_false
+        CLI.color_enabled?(CLI::ColorMode::Auto, true, nil, nil).should be_false
+      end
+    end
+
+    describe "progress charset" do
+      it "reads --progress-charset" do
+        parse(["--progress-charset", "ascii"]).progress_charset.should eq(Progress::Charset::Ascii)
+        parse(["--progress-charset", "unicode"]).progress_charset.should eq(Progress::Charset::Unicode)
       end
     end
 
@@ -268,29 +299,40 @@ module Scroll
     # shell would be offered candidates for the wrong word.
     describe "completion" do
       it "completes the cursor word when a bare -N is already on the line" do
-        candidates = complete(["__complete", "2", "scroll", "-20", "--al"])
-        candidates.should contain("--alt")
-        candidates.should contain("--alt-region")
-        candidates.should contain("--alt-full")
+        candidates = complete(["__complete", "2", "scroll", "-20", "--fi"])
+        candidates.should contain("--file")
+        candidates.should contain("--file-size")
+        candidates.should contain("--final")
       end
 
       it "offers the same candidates with and without a bare -N on the line" do
-        with_shorthand = complete(["__complete", "2", "scroll", "-20", "--al"])
-        without = complete(["__complete", "1", "scroll", "--al"])
+        with_shorthand = complete(["__complete", "2", "scroll", "-20", "--fi"])
+        without = complete(["__complete", "1", "scroll", "--fi"])
+        with_shorthand.should eq(without)
+      end
+
+      # -c and -C expand the same way, and must be left alone here too.
+      it "offers the same candidates with a color shorthand on the line" do
+        with_shorthand = complete(["__complete", "2", "scroll", "-C", "--fi"])
+        without = complete(["__complete", "1", "scroll", "--fi"])
         with_shorthand.should eq(without)
       end
 
       it "completes an enum flag's values" do
-        complete(["__complete", "2", "scroll", "--alt-mode", ""])
-          .should eq(["auto", "region", "full"])
+        complete(["__complete", "2", "scroll", "--color", ""])
+          .should eq(["auto", "on", "off"])
+        complete(["__complete", "2", "scroll", "--progress-charset", ""])
+          .should eq(["unicode", "ascii"])
       end
 
       it "offers filesystem completion for --name" do
         complete(["__complete", "2", "scroll", "--name", ""]).should eq(["__sac_complete_files__"])
       end
 
-      it "still expands a bare -N outside a completion callback" do
+      it "still expands the shorthands outside a completion callback" do
         CLI.expand_count_shorthand(["-20"]).should eq(["--lines", "20"])
+        CLI.expand_count_shorthand(["-c"]).should eq(["--color", "on"])
+        CLI.expand_count_shorthand(["-C"]).should eq(["--color", "off"])
       end
     end
 
