@@ -30,9 +30,25 @@ module Scroll
       @progress_total = Progress::Total.new
       @progress_warnings = [] of String
       @counters = nil.as(Progress::Counters?)
+      @terminal = nil.as(TerminalProgress?)
       if @display && @config.progress?
         @progress_total, @progress_warnings = Runner.progress_total(@config)
         @counters = Progress::Counters.new
+        if Runner.terminal_progress?(@config.terminal_progress, STDERR.tty?)
+          @terminal = TerminalProgress.new(STDERR)
+        end
+      end
+    end
+
+    # Whether to drive the terminal's own progress indicator. An explicit
+    # --terminal-progress or --no-terminal-progress settles it and the terminal
+    # is never queried; left alone, the terminal is asked to name itself and only
+    # the few known to show it are driven.
+    def self.terminal_progress?(preference : Bool?, stderr_tty : Bool) : Bool
+      case preference
+      in true  then true
+      in false then false
+      in Nil   then stderr_tty && Terminal.reports_progress?(Terminal.version_response)
       end
     end
 
@@ -197,6 +213,7 @@ module Scroll
         start_ticker(ticks, ticking)
         dirty = false
         renderer.start
+        report_terminal meter # so the indicator appears with the display, not a tick later
 
         loop do
           select
@@ -206,6 +223,7 @@ module Scroll
             free.send message.buffer
             dirty = true
           when ticks.receive
+            report_terminal meter
             if dirty
               painted = progress_line(meter, renderer.width)
               renderer.draw sorter.order(tail.snapshot), painted
@@ -224,6 +242,7 @@ module Scroll
         ticking.set false
         tail.finalize(@config.final?)
         renderer.draw sorter.order(tail.snapshot), progress_line(meter, renderer.width)
+        @terminal.try &.clear
         renderer.finish
         done.send nil
       rescue IO::Error
@@ -252,6 +271,7 @@ module Scroll
         start_ticker(ticks, ticking)
         dirty = false
         renderer.start
+        report_terminal meter # so the indicator appears with the display, not a tick later
 
         loop do
           select
@@ -261,6 +281,7 @@ module Scroll
             free.send message.buffer
             dirty = true
           when ticks.receive
+            report_terminal meter
             if dirty
               painted = progress_line(meter, renderer.width)
               renderer.draw window.snapshot, painted
@@ -276,6 +297,7 @@ module Scroll
         ticking.set false
         window.finalize(@config.final?)
         renderer.draw window.snapshot, progress_line(meter, renderer.width)
+        @terminal.try &.clear
         renderer.finish
         done.send nil
       rescue IO::Error
@@ -301,6 +323,7 @@ module Scroll
         dirty = false
         Signal::WINCH.trap { renderer.notify_resize }
         renderer.start
+        report_terminal meter # so the indicator appears with the display, not a tick later
 
         loop do
           select
@@ -310,6 +333,7 @@ module Scroll
             free.send message.buffer
             dirty = true
           when ticks.receive
+            report_terminal meter
             if dirty
               renderer.flush
               dirty = false
@@ -322,6 +346,7 @@ module Scroll
         end
 
         ticking.set false
+        @terminal.try &.clear
         renderer.finish(@config.final?)
         done.send nil
       rescue IO::Error
@@ -342,6 +367,14 @@ module Scroll
       return unless progress?
       Progress.new(@progress_total, @config.name_text,
         color: @config.color?, charset: @config.progress_charset)
+    end
+
+    # Push how far along the run is to the terminal's own indicator.
+    private def report_terminal(meter : Progress?) : Nil
+      terminal = @terminal
+      counters = @counters
+      return unless terminal && meter && counters
+      terminal.report meter.fraction(counters.bytes, counters.lines)
     end
 
     # The progress line at the renderer's width, or nil when it is off.
@@ -392,6 +425,10 @@ module Scroll
     end
 
     private def install_display_teardown : Nil
+      # Registered first so it runs last: the indicator goes away however the run
+      # ends, including a signal.
+      at_exit { @terminal.try &.clear }
+
       # Fullscreen teardown must also leave the alt screen and reset the scroll region;
       # the inline path only needs the cursor shown. Both restores are idempotent
       # and safe even if the display never started.

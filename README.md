@@ -78,6 +78,7 @@ Progress:
   --size-lines COUNT              Expected input size in lines; implies --progress
   --file-size PATH                Take the expected input size from the size of PATH; implies --progress
   --name NAME                     Label to show in the progress line; implies --progress
+  --terminal-progress             Drive the terminal's own progress indicator (--no- skips even the query)
   --color WHEN                    Colorize the progress line (-c is --color on, -C is --color off)
   --progress-charset SET          Bar glyphs: unicode draws eighth-of-a-column steps, ascii stays in ASCII
 
@@ -151,6 +152,13 @@ xz -dc archive.tar.xz | scroll --size 4.2G --name archive.tar.xz > /dev/null
 A name takes the space the stats leave, and scrolls horizontally when the
 terminal is too narrow to show it whole. A narrow terminal gives up stats fields
 before the bar and the name lose room.
+
+Terminals that show a progress indicator of their own — in a tab, a dock icon,
+or a taskbar — are driven along with the line, through `OSC 9;4`. Since a
+terminal that does not know that sequence would print it into the display, one
+has to name itself first: `scroll` asks with `XTVERSION` and waits 100ms for an
+answer naming ghostty, kitty, or iTerm2. `--terminal-progress` and
+`--no-terminal-progress` answer for it, and skip the question entirely.
 
 The line is colorized when STDERR is a terminal that can show it — `-c` forces
 color on, `-C` off, and `--color on|off|auto` says the same thing at length.

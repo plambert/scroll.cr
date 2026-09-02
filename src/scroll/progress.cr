@@ -408,8 +408,9 @@ module Scroll
       end
     end
 
-    # How much of the input is done, or nil when the size is unknown.
-    private def fraction(bytes : Int64, lines : Int64) : Float64?
+    # How much of the input is done, or nil when the size is unknown. Public
+    # because the terminal's own indicator is driven from the same number.
+    def fraction(bytes : Int64, lines : Int64) : Float64?
       if total = @total.bytes
         return (bytes.to_f / total).clamp(0.0, 1.0) if total > 0
       end

@@ -58,6 +58,19 @@ module Scroll
       end
     end
 
+    describe ".terminal_progress?" do
+      # An explicit preference is the whole answer, and is what keeps the
+      # terminal from being queried at all.
+      it "obeys an explicit preference without asking the terminal" do
+        Runner.terminal_progress?(true, false).should be_true
+        Runner.terminal_progress?(false, true).should be_false
+      end
+
+      it "asks nothing when STDERR is not a terminal" do
+        Runner.terminal_progress?(nil, false).should be_false
+      end
+    end
+
     describe ".display_enabled?" do
       it "keeps the same-terminal suppression when STDOUT is not suppressed" do
         # force | suppress | stderr_tty | stdout_tty | expected

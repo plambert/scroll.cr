@@ -122,6 +122,13 @@ module Scroll
       "Label to show in the progress line; implies --progress",
       group: "Progress"
 
+    # Tri-state, like --null: nil asks the terminal what it is, true and false
+    # settle it without asking. --no-terminal-progress therefore also means "do
+    # not query the terminal at all".
+    flag terminal_progress : Bool?, "--terminal-progress",
+      "Drive the terminal's own progress indicator (--no- skips even the query)",
+      group: "Progress"
+
     flag color : ColorMode = ColorMode::Auto, "--color WHEN",
       "Colorize the progress line (-c is --color on, -C is --color off)",
       group: "Progress"
@@ -181,7 +188,8 @@ module Scroll
 
     # Naming any part of the input size, or a label, turns the progress line on.
     def progress? : Bool
-      @progress || !@size.nil? || !@size_lines.nil? || !@size_file.nil? || !@name.nil?
+      @progress || !@size.nil? || !@size_lines.nil? || !@size_file.nil? ||
+        !@name.nil? || @terminal_progress == true
     end
 
     # The --name label, sanitized of control bytes when the display draws it.

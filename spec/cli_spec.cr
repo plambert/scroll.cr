@@ -280,6 +280,17 @@ module Scroll
         end
       end
 
+      it "leaves the terminal indicator to the terminal by default" do
+        parse([] of String).terminal_progress.should be_nil
+      end
+
+      # An explicit answer settles it; the point of --no- is that the terminal is
+      # never even asked.
+      it "takes --terminal-progress and its negation as an explicit answer" do
+        parse(["--terminal-progress"]).terminal_progress.should be_true
+        parse(["--no-terminal-progress"]).terminal_progress.should be_false
+      end
+
       it "keeps --name as given" do
         parse(["--name", "build.log"]).name_text.should eq("build.log")
       end
@@ -290,6 +301,11 @@ module Scroll
         parse(["--size", "1k"]).progress?.should be_true
         parse(["--size-lines", "10"]).progress?.should be_true
         parse(["--name", "build.log"]).progress?.should be_true
+        parse(["--terminal-progress"]).progress?.should be_true
+      end
+
+      it "leaves the progress line off when the indicator is refused" do
+        parse(["--no-terminal-progress"]).progress?.should be_false
       end
     end
 
