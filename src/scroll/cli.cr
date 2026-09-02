@@ -4,6 +4,9 @@ module Scroll
   HELP_FOOTER = <<-HELP_FOOTER
     A bare -N is shorthand for --lines N (e.g. -20 means --lines 20).
 
+    On the alternate screen, region mode honors -N; full mode ignores it and uses
+    the whole screen. Auto picks region when DECSTBM looks supported.
+
     Examples:
       long-running-build | scroll -20 | tee build.log
       noisy-job | scroll --null                     watch the tail, discard output
@@ -94,17 +97,17 @@ module Scroll
       "Compare keys as human numbers, e.g. 1k < 2M (implies --sort)",
       group: "Sorting", negatable: false
 
-    flag alt : Bool = false, "--alt",
+    # One flag, three shortcut switches. `--alt` picks Auto, `--alt-region` forces
+    # Region, `--alt-full` forces Full; the bare per-case switches the enum would
+    # otherwise generate (--auto/--region/--full) are too generic to expose, so
+    # `except:` suppresses them and `aliases:` names the three we want. They feed a
+    # single value stream, so contradictory spellings resolve last-wins instead of
+    # needing a mutual-exclusion check. Left nil, the alternate screen is off.
+    flag alt_screen : AltMode?, "--alt-mode",
       "Draw on the alternate screen: faster, and it vanishes on exit",
-      group: "Alternate screen", negatable: false
-
-    flag alt_region : Bool = false, "--alt-region",
-      "Force region mode, which honors -N",
-      group: "Alternate screen", negatable: false
-
-    flag alt_full : Bool = false, "--alt-full",
-      "Force full mode, which ignores -N and uses the whole screen",
-      group: "Alternate screen", negatable: false
+      group: "Alternate screen",
+      shortcut_flags: {except:  [:auto, :region, :full],
+                       aliases: {alt: :auto, alt_region: :region, alt_full: :full}}
 
     # Bool predicates, so the rest of the codebase reads `config.force?` rather
     # than the plain property the macro generates.
@@ -147,15 +150,20 @@ module Scroll
       !@file.nil?
     end
 
-    # Any of the three --alt spellings turns the alternate screen on.
+    # Any of the --alt spellings turns the alternate screen on.
     def alt? : Bool
-      @alt || @alt_region || @alt_full
+      !@alt_screen.nil?
     end
 
     def alt_mode : AltMode
-      return AltMode::Region if @alt_region
-      return AltMode::Full if @alt_full
-      AltMode::Auto
+      @alt_screen || AltMode::Auto
+    end
+
+    # Run the cross-flag rules after parsing, before `run`. As a hook they cannot
+    # be forgotten by a future entry point the way an explicit call at the top of
+    # `run` can.
+    before_run do
+      validate!
     end
 
     # Cross-flag rules the per-flag types cannot express. Raises ParseError so
@@ -172,8 +180,6 @@ module Scroll
         end
       end
 
-      raise Shell::AutoComplete::ParseError.new "--alt-region and --alt-full are mutually exclusive" if @alt_region && @alt_full
-
       if watch_proc?
         {% unless flag?(:linux) %}
           raise Shell::AutoComplete::ParseError.new "--watch-proc is only supported on Linux"
@@ -182,7 +188,6 @@ module Scroll
     end
 
     def run
-      validate!
       Runner.new(self).run
     end
 
@@ -206,7 +211,14 @@ module Scroll
     # Translate a bare `-N` token (e.g. -20) into `--lines N`, leaving every other
     # token untouched. Applied before dispatch, since the parser has no notion of
     # a numeric flag name.
+    #
+    # A completion callback (`__complete <cword> <words...>`, emitted by the
+    # generated bash/zsh/fish wrappers) is passed through untouched. Rewriting one
+    # token into two would shift every word after it without moving `cword`, so the
+    # shell would be offered candidates for the wrong word.
     def self.expand_count_shorthand(opts : Array(String)) : Array(String)
+      return opts.dup if opts.first? == "__complete"
+
       result = [] of String
       opts.each do |token|
         if match = token.match(/\A-(\d+)\z/)

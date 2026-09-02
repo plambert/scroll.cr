@@ -7,6 +7,14 @@ private def parse(args : Array(String)) : Scroll::CLI
   cli
 end
 
+# Answer a completion callback the way `Scroll.run` does — same composition, with
+# stdout captured so the candidates can be inspected.
+private def complete(args : Array(String)) : Array(String)
+  io = IO::Memory.new
+  Scroll::CLI.dispatch(Scroll::CLI.expand_count_shorthand(args), stdout: io)
+  io.to_s.lines
+end
+
 module Scroll
   describe CLI do
     describe "defaults" do
@@ -179,10 +187,45 @@ module Scroll
         cli.lines.should eq(20)
       end
 
-      it "rejects contradictory alt modes" do
-        expect_raises(Shell::AutoComplete::ParseError, /mutually exclusive/) do
-          parse(["--alt-region", "--alt-full"])
-        end
+      it "names the mode directly with --alt-mode" do
+        cli = parse(["--alt-mode", "full"])
+        cli.alt?.should be_true
+        cli.alt_mode.should eq(CLI::AltMode::Full)
+      end
+
+      # The three switches feed one value stream, so contradictory spellings
+      # resolve last-wins rather than raising.
+      it "resolves contradictory alt modes last-wins" do
+        parse(["--alt-region", "--alt-full"]).alt_mode.should eq(CLI::AltMode::Full)
+        parse(["--alt-full", "--alt-region"]).alt_mode.should eq(CLI::AltMode::Region)
+      end
+    end
+
+    # The generated bash/zsh/fish wrappers call `scroll __complete <cword>
+    # <words...>`. expand_count_shorthand must leave those words alone: rewriting
+    # one token into two would shift every later word without moving cword, so the
+    # shell would be offered candidates for the wrong word.
+    describe "completion" do
+      it "completes the cursor word when a bare -N is already on the line" do
+        candidates = complete(["__complete", "2", "scroll", "-20", "--al"])
+        candidates.should contain("--alt")
+        candidates.should contain("--alt-region")
+        candidates.should contain("--alt-full")
+      end
+
+      it "offers the same candidates with and without a bare -N on the line" do
+        with_shorthand = complete(["__complete", "2", "scroll", "-20", "--al"])
+        without = complete(["__complete", "1", "scroll", "--al"])
+        with_shorthand.should eq(without)
+      end
+
+      it "completes an enum flag's values" do
+        complete(["__complete", "2", "scroll", "--alt-mode", ""])
+          .should eq(["auto", "region", "full"])
+      end
+
+      it "still expands a bare -N outside a completion callback" do
+        CLI.expand_count_shorthand(["-20"]).should eq(["--lines", "20"])
       end
     end
 
