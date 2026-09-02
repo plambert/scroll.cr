@@ -97,6 +97,30 @@ module Scroll
       "Compare keys as human numbers, e.g. 1k < 2M (implies --sort)",
       group: "Sorting", negatable: false
 
+    flag progress : Bool = false, "--progress",
+      "Show a progress line under the tail",
+      group: "Progress", negatable: false
+
+    # The three size options all turn --progress on, the way --sort-by turns on
+    # --sort: naming a size is only useful to the progress line.
+    flag size : Int64?, "--size BYTES",
+      "Expected input size, e.g. 500M (1024-based); implies --progress",
+      group: "Progress", transform_with: :transform_size
+
+    flag size_lines : Int64?, "--size-lines COUNT",
+      "Expected input size in lines; implies --progress",
+      group: "Progress", range: 1_i64..
+
+    flag size_file : Path?, "--file-size PATH",
+      "Take the expected input size from the size of PATH; implies --progress",
+      group: "Progress"
+
+    # A Path rather than a String so the shells complete it as a filename; any
+    # string is a valid Path, so an arbitrary label still parses.
+    flag name : Path?, "--name NAME",
+      "Label to show in the progress line; implies --progress",
+      group: "Progress"
+
     # One flag, three shortcut switches. `--alt` picks Auto, `--alt-region` forces
     # Region, `--alt-full` forces Full; the bare per-case switches the enum would
     # otherwise generate (--auto/--region/--full) are too generic to expose, so
@@ -150,6 +174,16 @@ module Scroll
       !@file.nil?
     end
 
+    # Naming any part of the input size, or a label, turns the progress line on.
+    def progress? : Bool
+      @progress || !@size.nil? || !@size_lines.nil? || !@size_file.nil? || !@name.nil?
+    end
+
+    # The --name label, sanitized of control bytes when the display draws it.
+    def name_text : String?
+      @name.try &.to_s
+    end
+
     # Any of the --alt spellings turns the alternate screen on.
     def alt? : Bool
       !@alt_screen.nil?
@@ -180,6 +214,10 @@ module Scroll
         end
       end
 
+      if path = @size_file
+        raise Shell::AutoComplete::ParseError.new "--file-size: not a file: #{path}" unless File.file?(path)
+      end
+
       if watch_proc?
         {% unless flag?(:linux) %}
           raise Shell::AutoComplete::ParseError.new "--watch-proc is only supported on Linux"
@@ -206,6 +244,12 @@ module Scroll
         raise ArgumentError.new "must be >= 1" if index < 1
         SortKey::Field.new(index)
       end
+    end
+
+    # Parse a `--size` value into a byte count: an integer, or a decimal with a
+    # 1024-based suffix (100b, 1.1k, 2.5GiB).
+    def self.transform_size(value : String) : Int64
+      Progress.parse_size value
     end
 
     # Translate a bare `-N` token (e.g. -20) into `--lines N`, leaving every other

@@ -201,6 +201,67 @@ module Scroll
       end
     end
 
+    describe "progress" do
+      it "is off unless asked for" do
+        cli = parse([] of String)
+        cli.progress?.should be_false
+        cli.size.should be_nil
+        cli.size_lines.should be_nil
+        cli.size_file.should be_nil
+        cli.name_text.should be_nil
+      end
+
+      it "turns on with --progress" do
+        parse(["--progress"]).progress?.should be_true
+      end
+
+      it "reads --size as a 1024-based byte count" do
+        parse(["--size", "1.5k"]).size.should eq(1536)
+        parse(["--size", "2M"]).size.should eq(2 * 1024 * 1024)
+      end
+
+      it "rejects a --size that is not a byte count" do
+        expect_raises(Shell::AutoComplete::ParseError, /not a byte size/) do
+          parse(["--size", "huge"])
+        end
+      end
+
+      it "reads --size-lines as a line count" do
+        parse(["--size-lines", "100"]).size_lines.should eq(100)
+      end
+
+      it "rejects a --size-lines below one" do
+        expect_raises(Shell::AutoComplete::ParseError) { parse(["--size-lines", "0"]) }
+      end
+
+      it "takes --file-size from an existing file" do
+        file = File.tempfile("scroll-size")
+        begin
+          parse(["--file-size", file.path]).size_file.should eq(Path[file.path])
+        ensure
+          file.delete
+        end
+      end
+
+      it "rejects a --file-size that is not a file" do
+        expect_raises(Shell::AutoComplete::ParseError, /not a file/) do
+          parse(["--file-size", "/no/such/file/here"])
+        end
+      end
+
+      it "keeps --name as given" do
+        parse(["--name", "build.log"]).name_text.should eq("build.log")
+      end
+
+      # Naming a size or a label is only useful to the progress line, so each
+      # implies it, the way --sort-by implies --sort.
+      it "turns the progress line on from any of the size options and --name" do
+        parse(["--size", "1k"]).progress?.should be_true
+        parse(["--size-lines", "10"]).progress?.should be_true
+        parse(["--name", "build.log"]).progress?.should be_true
+      end
+    end
+
     # The generated bash/zsh/fish wrappers call `scroll __complete <cword>
     # <words...>`. expand_count_shorthand must leave those words alone: rewriting
     # one token into two would shift every later word without moving cword, so the
@@ -222,6 +283,10 @@ module Scroll
       it "completes an enum flag's values" do
         complete(["__complete", "2", "scroll", "--alt-mode", ""])
           .should eq(["auto", "region", "full"])
+      end
+
+      it "offers filesystem completion for --name" do
+        complete(["__complete", "2", "scroll", "--name", ""]).should eq(["__sac_complete_files__"])
       end
 
       it "still expands a bare -N outside a completion callback" do

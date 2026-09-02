@@ -1,7 +1,51 @@
 require "./spec_helper"
 
+# Parse args into a CLI the way `Scroll.run` does, without running anything.
+private def config(args : Array(String)) : Scroll::CLI
+  Scroll::CLI.parse(args)
+end
+
 module Scroll
   describe Runner do
+    describe ".progress_total" do
+      it "takes the size from the file named by --file-size" do
+        file = File.tempfile("scroll-size")
+        begin
+          file.print "x" * 1234
+          file.flush
+          total, warnings = Runner.progress_total(config(["--file-size", file.path]))
+          total.bytes.should eq(1234)
+          warnings.should be_empty
+        ensure
+          file.delete
+        end
+      end
+
+      it "warns about the line count it ignored when a byte size is also given" do
+        total, warnings = Runner.progress_total(config(["--size", "2k", "--size-lines", "50"]))
+        total.bytes.should eq(2048)
+        warnings.should eq(["--size-lines ignored; a byte size takes precedence"])
+      end
+
+      it "reports an unknown total for a bare --progress" do
+        total, warnings = Runner.progress_total(config(["--progress"]))
+        total.known?.should be_false
+        warnings.should be_empty
+      end
+
+      # The path is checked at parse time, so a file that vanishes in between
+      # degrades to an unknown size rather than taking the run down.
+      it "warns and carries on when the file cannot be measured" do
+        path = File.tempname("scroll-size")
+        cli = CLI.parse(["--progress"] of String)
+        cli.size_file = Path[path]
+        total, warnings = Runner.progress_total(cli)
+        total.known?.should be_false
+        warnings.size.should eq(1)
+        warnings.first.should start_with("--file-size:")
+      end
+    end
+
     describe ".suppress_stdout?" do
       it "resolves the null intent against whether the mode implies null" do
         # null_pref | mode_implies_null | expected

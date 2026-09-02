@@ -26,6 +26,29 @@ module Scroll
       # a pool buffer instead of dropping when it falls behind. STDOUT throughput
       # is deliberately relaxed under --sort (it cannot skip lines anyway).
       @may_drop = !@config.sort?
+      # Progress needs somewhere to draw, so it rides on the display being on.
+      @progress_total = Progress::Total.new
+      @progress_warnings = [] of String
+      @counters = nil.as(Progress::Counters?)
+      if @display && @config.progress?
+        @progress_total, @progress_warnings = Runner.progress_total(@config)
+        @counters = Progress::Counters.new
+      end
+    end
+
+    # The resolved progress total, plus warnings about any size option it had to
+    # ignore. --file-size is read here rather than at parse time, so a file that
+    # disappears in between degrades to an unknown size instead of an error.
+    def self.progress_total(config : CLI) : {Progress::Total, Array(String)}
+      warnings = [] of String
+      file_size = config.size_file.try do |path|
+        File.size(path).to_i64
+      rescue ex : File::Error
+        warnings << "--file-size: #{ex.message}"
+        nil
+      end
+      total, ignored = Progress.resolve(config.size, config.size_lines, file_size)
+      {total, warnings + ignored}
     end
 
     # STDIN by default; a followed file when --file is set.
@@ -65,6 +88,7 @@ module Scroll
 
     def run : Nil
       STDOUT.sync = true
+      report_progress_warnings
       if @display
         run_with_display
       else
@@ -73,6 +97,13 @@ module Scroll
       end
     ensure
       @source.close
+    end
+
+    # Written before the display starts, since after that STDERR belongs to it.
+    private def report_progress_warnings : Nil
+      @progress_warnings.each { |warning| STDERR.puts "scroll: #{warning}" }
+    rescue IO::Error
+      # Nothing we can do if even the warning can't be written.
     end
 
     private def warn_stdout_is_tty : Nil
@@ -115,7 +146,11 @@ module Scroll
         buffer = pooled || reserved
         count = @source.read(buffer)
         break if count == 0
-        write_stdout buffer[0, count]
+        chunk = buffer[0, count]
+        write_stdout chunk
+        # Counted here rather than in the render fiber so the totals stay exact
+        # even when a chunk is dropped from the display.
+        @counters.try &.add(count, Progress::Counters.newlines(chunk))
         filled.send(Chunk.new(buffer, count, offset)) unless pooled.nil?
         offset += count
       end
@@ -149,8 +184,9 @@ module Scroll
       # Assigned before the begin so it is guaranteed non-nil in the rescue.
       ticking = Atomic(Bool).new(true)
       begin
-        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
+        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, progress: progress?)
         @renderer = renderer
+        meter = build_meter
         tail = Tail.new(@config.lines)
         sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         ticks = Channel(Nil).new(1)
@@ -167,15 +203,19 @@ module Scroll
             dirty = true
           when ticks.receive
             if dirty
-              renderer.draw sorter.order(tail.snapshot)
+              renderer.draw sorter.order(tail.snapshot), progress_line(meter, renderer.width)
               dirty = false
+            elsif line = progress_line(meter, renderer.width)
+              # No new lines, but the rates, the ETA, and a scrolling name still
+              # move, so the bottom row alone is repainted.
+              renderer.draw_progress line
             end
           end
         end
 
         ticking.set false
         tail.finalize(@config.final?)
-        renderer.draw sorter.order(tail.snapshot)
+        renderer.draw sorter.order(tail.snapshot), progress_line(meter, renderer.width)
         renderer.finish
         done.send nil
       rescue IO::Error
@@ -194,8 +234,9 @@ module Scroll
     private def sort_render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
       ticking = Atomic(Bool).new(true)
       begin
-        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?)
+        renderer = Renderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, progress: progress?)
         @renderer = renderer
+        meter = build_meter
         sorter = Sorter.new(@config.sort?, @config.reverse?, @config.human?, @config.sort_by)
         window = SortWindow.new(@config.lines, sorter)
         ticks = Channel(Nil).new(1)
@@ -212,15 +253,17 @@ module Scroll
             dirty = true
           when ticks.receive
             if dirty
-              renderer.draw window.snapshot
+              renderer.draw window.snapshot, progress_line(meter, renderer.width)
               dirty = false
+            elsif line = progress_line(meter, renderer.width)
+              renderer.draw_progress line
             end
           end
         end
 
         ticking.set false
         window.finalize(@config.final?)
-        renderer.draw window.snapshot
+        renderer.draw window.snapshot, progress_line(meter, renderer.width)
         renderer.finish
         done.send nil
       rescue IO::Error
@@ -237,7 +280,9 @@ module Scroll
     private def alt_render_loop(free : Channel(Bytes), filled : Channel(Chunk?), done : Channel(Nil)) : Nil
       ticking = Atomic(Bool).new(true)
       begin
-        renderer = AltRenderer.new(STDERR, @config.lines, sanitize: @config.sanitize?, region: alt_region?)
+        renderer = AltRenderer.new(STDERR, @config.lines, sanitize: @config.sanitize?,
+          region: alt_region?, progress: progress?)
+        meter = build_meter
         ticks = Channel(Nil).new(1)
         start_ticker(ticks, ticking)
         dirty = false
@@ -256,6 +301,9 @@ module Scroll
               renderer.flush
               dirty = false
             end
+            if line = progress_line(meter, renderer.width)
+              renderer.draw_progress line
+            end
           end
         end
 
@@ -269,6 +317,23 @@ module Scroll
         drain filled, free
         done.send nil
       end
+    end
+
+    private def progress? : Bool
+      !@counters.nil?
+    end
+
+    # A meter for this run, or nil when the progress line is off.
+    private def build_meter : Progress?
+      return unless progress?
+      Progress.new(@progress_total, @config.name_text)
+    end
+
+    # The progress line at the renderer's width, or nil when it is off.
+    private def progress_line(meter : Progress?, width : Int32) : String?
+      counters = @counters
+      return unless meter && counters
+      meter.render(width, counters.bytes, counters.lines)
     end
 
     # Resolve the concrete alt mode. Auto assumes region mode unless $TERM marks

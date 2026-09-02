@@ -7,24 +7,37 @@ module Scroll
   # the terminal never scrolls again and the region cannot drift or clobber
   # history. Lines are sanitized and truncated to one short of the terminal width
   # (never touching the last column, which can trigger auto-wrap). The raw stream
-  # on STDOUT is never touched by any of this.
+  # on STDOUT is never touched by any of this. With `--progress` the bottom row of
+  # the region belongs to the progress line, and can be repainted on its own.
   class Renderer
     HIDE_CURSOR = "\e[?25l"
     SHOW_CURSOR = "\e[?25h"
     CLEAR_LINE  = "\e[2K"
 
-    def initialize(@io : IO, @lines : Int32, @sanitize : Bool = true)
+    # `progress` reserves the bottom row of the region for the progress line.
+    # `size` overrides the terminal size query (rows, cols); it exists so specs
+    # can drive the renderer against an `IO::Memory`, which has no fd.
+    def initialize(@io : IO, @lines : Int32, @sanitize : Bool = true,
+                   @progress : Bool = false, @size : {Int32, Int32}? = nil)
       @max = 0      # largest height the region may reach (set in #start)
       @height = 0   # rows currently reserved; grows toward @max as lines arrive
       @done = false # guards #finish against running twice
       @started = false
     end
 
+    # Columns a row may use: one short of the terminal width, since writing the
+    # last column can trigger auto-wrap.
+    def width : Int32
+      _, cols = @size || Terminal.size
+      cols > 1 ? cols - 1 : cols
+    end
+
     # Hide the cursor and record the ceiling for the region height. The region is
     # not reserved up front: it grows one row at a time as lines arrive, so a
     # short stream never opens more rows than it has lines.
     def start : Nil
-      rows, _ = Terminal.size
+      rows, _ = @size || Terminal.size
+      rows -= 1 if @progress # the bottom row belongs to the progress line
       @max = Math.min(@lines, rows)
       @max = 1 if @max < 1
       @started = true
@@ -34,27 +47,48 @@ module Scroll
 
     # Repaint the region. The cursor is assumed to rest at column 0 of the first
     # region row, and is left there again when done.
-    def draw(lines : Array(String)) : Nil
+    def draw(lines : Array(String), progress : String? = nil) : Nil
       return if @max < 1
-      _, cols = Terminal.size
-      width = cols > 1 ? cols - 1 : cols
+      row_width = width
 
-      grow_to Math.min(lines.size, @max)
+      grow_to Math.min(lines.size, @max) + (progress ? 1 : 0)
       return if @height < 1 # nothing to show yet
 
-      visible = lines.last(@height)
-      pad = @height - visible.size # blank rows above the content (bottom-aligned)
+      content_height = progress ? @height - 1 : @height
+      visible = lines.last(content_height)
+      pad = content_height - visible.size # blank rows above the content (bottom-aligned)
       last = @height - 1
       sequence = String.build do |str|
         @height.times do |row|
           str << CLEAR_LINE
-          content_index = row - pad
-          str << prepare(visible[content_index], width) if content_index >= 0
+          if progress && row == last
+            str << prepare(progress, row_width)
+          else
+            content_index = row - pad
+            str << prepare(visible[content_index], row_width) if content_index >= 0
+          end
           str << "\r\n" unless row == last
         end
         # Return to the first region row without emitting a newline past the last.
         str << "\e[" << last << 'A' if @height > 1
         str << '\r'
+      end
+      @io << sequence
+      @io.flush
+    end
+
+    # Repaint only the progress row. Ticks where no new line arrived still move
+    # the rates, the ETA, and a scrolling name, and repainting one row instead of
+    # the whole region keeps that cheap.
+    def draw_progress(text : String) : Nil
+      return unless @progress
+      return if @max < 1
+      grow_to 1 if @height < 1
+      last = @height - 1
+      sequence = String.build do |str|
+        str << "\e[" << last << 'B' if last > 0
+        str << CLEAR_LINE << prepare(text, width) << '\r'
+        str << "\e[" << last << 'A' if last > 0
       end
       @io << sequence
       @io.flush

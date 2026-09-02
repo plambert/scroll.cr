@@ -12,6 +12,9 @@ module Scroll
   # * full mode (`@region` false): the whole alt screen scrolls naturally,
   #   ignoring `-N`. Tee-like. Used when DECSTBM is judged unsupported.
   #
+  # With `--progress` the bottom screen row is held back from both modes for the
+  # progress line, which means full mode sets a band too.
+  #
   # STDOUT is never touched by any of this; the display lives entirely on the
   # STDERR IO handed to the constructor.
   class AltRenderer
@@ -21,6 +24,9 @@ module Scroll
     LEAVE_ALT    = "\e[?1049l"
     RESET_REGION = "\e[r"
     CLEAR_HOME   = "\e[2J\e[H"
+    CLEAR_LINE   = "\e[2K"
+    SAVE_CURSOR  = "\e7"
+    LOAD_CURSOR  = "\e8"
 
     NEWLINE = '\n'.ord.to_u8
 
@@ -31,7 +37,8 @@ module Scroll
     # use it is nil and the size is read from the terminal on `start` and on
     # every resize.
     def initialize(@io : IO, @lines : Int32, @sanitize : Bool = true,
-                   region : Bool = true, @size : {Int32, Int32}? = nil)
+                   region : Bool = true, @progress : Bool = false,
+                   @size : {Int32, Int32}? = nil)
       @region = region
       @rows = 0
       @cols = 0
@@ -46,14 +53,31 @@ module Scroll
 
     # Enter the alt screen, hide the cursor, and (region mode) set the DECSTBM
     # band and park the cursor at its bottom-left so appended lines scroll up.
+    # Full mode with a progress line still needs a band: without one the bottom
+    # row scrolls away with everything else, taking the bar with it.
     def start : Nil
       read_size
       @io << ENTER_ALT << HIDE_CURSOR
-      if region?
+      if region? || @progress
         emit_region
       else
         @io << CLEAR_HOME
       end
+      @io.flush
+    end
+
+    # Columns a row may use.
+    def width : Int32
+      line_width
+    end
+
+    # Paint the progress line on the bottom screen row, outside the scrolling
+    # band, and put the cursor back where the band left it.
+    def draw_progress(text : String) : Nil
+      return unless @progress
+      apply_resize if @resized.get
+      @io << SAVE_CURSOR << "\e[" << @rows << ";1H" << CLEAR_LINE
+      @io << prepare(text, line_width) << LOAD_CURSOR
       @io.flush
     end
 
@@ -143,12 +167,13 @@ module Scroll
     private def apply_resize : Nil
       @resized.set(false)
       read_size
-      emit_region if region?
+      emit_region if region? || @progress
     end
 
     private def read_size : Nil
       @rows, @cols = @size || Terminal.size
-      @height = region? ? Math.min(@lines, @rows) : @rows
+      usable = @progress ? @rows - 1 : @rows # the bottom row holds the bar
+      @height = region? ? Math.min(@lines, usable) : usable
       @height = 1 if @height < 1
     end
 

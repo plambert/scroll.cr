@@ -27,6 +27,57 @@ module Scroll
       end
     end
 
+    describe "#start with a progress line" do
+      it "keeps the bottom row out of the band in region mode" do
+        io = IO::Memory.new
+        AltRenderer.new(io, 5, region: true, progress: true, size: {24, 80}).start
+        io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[1;5r\e[5;1H")
+      end
+
+      it "clamps the band to one row short of the terminal in region mode" do
+        io = IO::Memory.new
+        AltRenderer.new(io, 100, region: true, progress: true, size: {24, 80}).start
+        io.to_s.should end_with("\e[2J\e[1;23r\e[23;1H")
+      end
+
+      # Full mode normally sets no region at all; a progress line needs one, or
+      # the bottom row scrolls away with everything else.
+      it "sets a band of every row but the last in full mode" do
+        io = IO::Memory.new
+        AltRenderer.new(io, 5, region: false, progress: true, size: {24, 80}).start
+        io.to_s.should eq("\e[?1049h\e[?25l\e[2J\e[1;23r\e[23;1H")
+      end
+    end
+
+    describe "#draw_progress" do
+      it "paints the bottom row and restores the cursor" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, 5, region: true, progress: true, size: {24, 80})
+        renderer.start
+        io.clear
+        renderer.draw_progress("50% done")
+        io.to_s.should eq("\e7\e[24;1H\e[2K50% done\e8")
+      end
+
+      it "truncates the text to the terminal width" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, 5, region: true, progress: true, size: {24, 10})
+        renderer.start
+        io.clear
+        renderer.draw_progress("0123456789abcdef")
+        io.to_s.should contain("\e[2K012345678\e8")
+      end
+
+      it "does nothing when the progress line is off" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, 5, region: true, size: {24, 80})
+        renderer.start
+        io.clear
+        renderer.draw_progress("ignored")
+        io.to_s.should be_empty
+      end
+    end
+
     describe "#feed and #flush" do
       it "writes each complete line terminated by CRLF" do
         io = IO::Memory.new
