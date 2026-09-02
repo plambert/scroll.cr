@@ -48,6 +48,8 @@ shards build --release
 ```text
 Usage: scroll [options]
 
+Show a live tail of a stream on STDERR while copying it to STDOUT
+
 Options:
   --lines, -n COUNT               Lines to show (default: 10)
   --interval MS                   Minimum ms between redraws (default: 40)
@@ -57,7 +59,7 @@ Options:
   --null                          Consume input without copying it to STDOUT (--no-null forces the copy)
 
 Following a file:
-  --file, -f PATH                 Follow PATH like `tail -F` instead of reading STDIN (implies --null)
+  --file, -f PATH                 Follow PATH like `tail -F`, starting with its last -N lines (implies --null)
   --from-start                    Stream the whole existing file before following
   --poll MS                       Ms between polls while waiting for data (default: 250)
   --pid PID                       Exit cleanly once process PID is gone
@@ -76,12 +78,12 @@ Progress:
   --size-lines COUNT              Expected input size in lines; implies --progress
   --file-size PATH                Take the expected input size from the size of PATH; implies --progress
   --name NAME                     Label to show in the progress line; implies --progress
+  --color WHEN                    Colorize the progress line (-c is --color on, -C is --color off)
+  --progress-charset SET          Bar glyphs: unicode draws eighth-of-a-column steps, ascii stays in ASCII
 
 Alternate screen:
-  --alt-mode auto|region|full     Draw on the alternate screen: faster, and it vanishes on exit
-  --alt                           Alias for --alt-mode auto
-  --alt-region                    Alias for --alt-mode region
-  --alt-full                      Alias for --alt-mode full
+  --fullscreen                    Draw on the alternate screen: faster, uses the whole screen, ignores -N
+  --leave                         On exit, echo the lines that were on the alternate screen
 ```
 
 A bare `-N` is shorthand for `--lines N` (e.g. `-20` means `--lines 20`).
@@ -93,8 +95,11 @@ tail -f access.log | scroll | grep -v healthcheck > filtered.log
 ## Following a file
 
 `--file`/`-f` follows a path the way `tail -F` does, reading appended data live
-and reopening across truncation and rotation, instead of reading STDIN. File mode
-implies `--null`, so nothing is written to STDOUT unless `--no-null` asks for it.
+and reopening across truncation and rotation, instead of reading STDIN. It opens
+on the last `-N` lines already in the file, so a follow starts with something on
+screen rather than waiting for the next write; `--from-start` streams the whole
+file instead. File mode implies `--null`, so nothing is written to STDOUT unless
+`--no-null` asks for it.
 
 ```sh
 scroll -f /var/log/app.log --pid "$(pgrep -f app)"
@@ -124,7 +129,7 @@ is the named capture `sort`, else the first group, else the whole match.
 bytes and lines read and the rate of each:
 
 ```text
-106K 20K ln 15M/s 2.7M ln/s
+106K · 20K ln · 15M/s · 2.7M ln/s
 ```
 
 Tell it how much input to expect — `--size` in bytes (an integer or a 1024-based
@@ -133,7 +138,7 @@ suffixed number such as `500M` or `1.1k`), `--size-lines` in lines, or
 an ETA:
 
 ```text
- 81% ████████████████████░░░░░ 106K/130K eta 4s 24M/s 20K ln 4.4M ln/s
+ 81% ███████████████████▉░░░░░ 106K/130K · eta 4s · 24M/s · 20K ln · 4.4M ln/s
 ```
 
 Any of those options turns the progress line on by itself, as does a `--name`
@@ -147,19 +152,26 @@ A name takes the space the stats leave, and scrolls horizontally when the
 terminal is too narrow to show it whole. A narrow terminal gives up stats fields
 before the bar and the name lose room.
 
+The line is colorized when STDERR is a terminal that can show it — `-c` forces
+color on, `-C` off, and `--color on|off|auto` says the same thing at length.
+`NO_COLOR` and a `$TERM` of `dumb` turn `auto` off. In color the bar is drawn as
+background, so the filled part and the track meet with no gap between glyphs, and
+the leading column takes one of the eighth-blocks for a seventh of a column of
+extra resolution. `--progress-charset ascii` keeps the whole line in ASCII.
+
 ## Alternate screen
 
-`--alt` draws on the terminal's alternate screen, which appends lines instead of
-repainting a window and so keeps up with a much faster stream. On exit the screen
-is restored and the last lines are echoed behind it.
+`--fullscreen` draws on the terminal's alternate screen, which appends lines
+instead of repainting a window and so keeps up with a much faster stream. It uses
+the whole screen, which is why `-N` means nothing there.
 
 ```sh
-make 2>&1 | scroll --alt -30 > build.log
+make 2>&1 | scroll --fullscreen > build.log
 ```
 
-Region mode honors `-N` by scrolling a band of that many lines; full mode ignores
-it and uses the whole screen. `--alt` picks region unless `$TERM` says the
-terminal is not a VT; `--alt-region` and `--alt-full` force the choice.
+On exit the screen is torn down and the original screen and scrollback come back
+untouched, leaving nothing behind. `--leave` echoes the lines that were visible
+onto the main screen, for a run whose tail is worth keeping.
 
 ## Shell completion
 
