@@ -315,7 +315,7 @@ module Scroll
       ticking = Atomic(Bool).new(true)
       begin
         renderer = AltRenderer.new(STDERR, sanitize: @config.sanitize?,
-          progress: progress?, leave: @config.leave?)
+          progress: progress?, leave_lines: @config.leave? ? @config.lines : nil)
         meter = build_meter
         last_progress = nil.as(String?)
         ticks = Channel(Nil).new(1)

@@ -190,9 +190,9 @@ module Scroll
         io.to_s.should eq("1\r\n2\r\n3\r\n4\e[?25h\e[r\e[?1049l")
       end
 
-      it "echoes the lines that were visible under --leave" do
+      it "echoes the last -N lines under --leave" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
+        renderer = AltRenderer.new(io, leave_lines: 10, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "1\n2\n3\n", 0_i64)
@@ -200,9 +200,10 @@ module Scroll
         io.to_s.should eq("1\r\n2\r\n3\e[?25h\e[r\e[?1049l1\r\n2\r\n3\r\n")
       end
 
-      it "echoes no more than a screenful" do
+      # -N is what --leave leaves behind, not the screenful the display showed.
+      it "echoes no more than -N lines, whatever the screen held" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, leave: true, size: {2, 80})
+        renderer = AltRenderer.new(io, leave_lines: 2, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "1\n2\n3\n4\n", 0_i64)
@@ -210,9 +211,19 @@ module Scroll
         io.to_s.should end_with("\e[?1049l3\r\n4\r\n")
       end
 
+      it "echoes more than the screen showed at once when -N asks for it" do
+        io = IO::Memory.new
+        renderer = AltRenderer.new(io, leave_lines: 4, size: {2, 80})
+        renderer.start
+        io.clear
+        feed_chunk(renderer, "1\n2\n3\n4\n", 0_i64)
+        renderer.finish(false)
+        io.to_s.should end_with("\e[?1049l1\r\n2\r\n3\r\n4\r\n")
+      end
+
       it "promotes a trailing newline-less line when final is set" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
+        renderer = AltRenderer.new(io, leave_lines: 10, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)
@@ -222,7 +233,7 @@ module Scroll
 
       it "omits a trailing newline-less line when final is not set" do
         io = IO::Memory.new
-        renderer = AltRenderer.new(io, leave: true, size: {24, 80})
+        renderer = AltRenderer.new(io, leave_lines: 10, size: {24, 80})
         renderer.start
         io.clear
         feed_chunk(renderer, "a\nb", 0_i64)

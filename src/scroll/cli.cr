@@ -6,7 +6,8 @@ module Scroll
     are shorthand for --color on and --color off.
 
     --fullscreen draws on the alternate screen, which uses the whole screen and
-    ignores -N. It vanishes on exit unless --leave echoes what was visible.
+    ignores -N -- except under --leave, where -N is how many lines are echoed
+    onto the main screen on the way out.
 
     Examples:
       long-running-build | scroll -20 | tee build.log
@@ -142,7 +143,7 @@ module Scroll
       group: "Alternate screen"
 
     flag leave : Bool = false, "--leave",
-      "On exit, echo the lines that were on the alternate screen",
+      "On exit, echo the last -N lines of the alternate screen onto the main one",
       group: "Alternate screen", negatable: false
 
     # Bool predicates, so the rest of the codebase reads `config.force?` rather

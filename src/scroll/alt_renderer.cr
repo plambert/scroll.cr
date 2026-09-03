@@ -8,8 +8,8 @@ module Scroll
   # A scrolling region (DECSTBM) is set only with `--progress`, to hold the
   # bottom row back for the progress line; without it the screen scrolls
   # naturally. On exit the alt screen is torn down and the original screen and
-  # scrollback are restored untouched — `--leave` then echoes the lines that were
-  # visible onto the main screen, so the run leaves a tail behind.
+  # scrollback are restored untouched — `--leave` then echoes the last `-N` lines
+  # onto the main screen, so the run leaves a tail behind.
   #
   # STDOUT is never touched by any of this; the display lives entirely on the
   # STDERR IO handed to the constructor.
@@ -30,14 +30,16 @@ module Scroll
     # can drive the renderer against an `IO::Memory`, which has no fd. In normal
     # use it is nil and the size is read from the terminal on `start` and on
     # every resize.
+    # `leave_lines` is how many lines --leave echoes onto the main screen on the
+    # way out; nil leaves nothing behind.
     def initialize(@io : IO, @sanitize : Bool = true, @progress : Bool = false,
-                   @leave : Bool = false, @size : {Int32, Int32}? = nil)
+                   @leave_lines : Int32? = nil, @size : {Int32, Int32}? = nil)
       @rows = 0
       @cols = 0
       @height = 0 # rows the stream may scroll through
       @line = IO::Memory.new
       @pending = Deque(String).new # complete lines awaiting the next flush
-      @recent = Deque(String).new  # ring of the visible lines, for --leave
+      @recent = Deque(String).new  # ring of the last leave_lines, for --leave
       @expected_offset = nil.as(Int64?)
       @skip_fragment = false
       @wrote_line = false # whether a line already occupies the cursor's row
@@ -129,8 +131,8 @@ module Scroll
     end
 
     # On EOF: optionally promote a trailing newline-less line, drain the buffer,
-    # then tear down the alt screen. Under `--leave` the lines that were on the
-    # screen are echoed onto the restored main screen; otherwise the run vanishes
+    # then tear down the alt screen. Under `--leave` the last `-N` lines are
+    # echoed onto the restored main screen; otherwise the run vanishes
     # completely, like `less`.
     def finish(final : Bool) : Nil
       if final
@@ -142,7 +144,7 @@ module Scroll
       end
       flush
       self.class.restore(@io)
-      echo_recent if @leave
+      echo_recent if @leave_lines
     end
 
     # Flag a terminal resize. Called from the SIGWINCH trap; it only flips the
@@ -190,9 +192,10 @@ module Scroll
 
     private def push(line : String) : Nil
       @pending.push line
-      return unless @leave
+      cap = @leave_lines
+      return unless cap
       @recent.push line
-      while @recent.size > @height
+      while @recent.size > cap
         @recent.shift
       end
     end

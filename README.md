@@ -84,7 +84,7 @@ Progress:
 
 Alternate screen:
   --fullscreen                    Draw on the alternate screen: faster, uses the whole screen, ignores -N
-  --leave                         On exit, echo the lines that were on the alternate screen
+  --leave                         On exit, echo the last -N lines of the alternate screen onto the main one
 ```
 
 A bare `-N` is shorthand for `--lines N` (e.g. `-20` means `--lines 20`).
@@ -178,8 +178,9 @@ make 2>&1 | scroll --fullscreen > build.log
 ```
 
 On exit the screen is torn down and the original screen and scrollback come back
-untouched, leaving nothing behind. `--leave` echoes the lines that were visible
-onto the main screen, for a run whose tail is worth keeping.
+untouched, leaving nothing behind. `--leave` echoes the last `-N` lines onto the
+main screen, for a run whose tail is worth keeping — the one thing `-N` still
+means here.
 
 ## Shell completion
 
