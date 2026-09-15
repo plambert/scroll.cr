@@ -1,8 +1,8 @@
-# scroll
+# scroll - like `cat` plus `tail`
 
-Copy STDIN to STDOUT unchanged while showing the last N lines of the stream in a
-live, in-place display on STDERR. It is a pipeline filter — like an interactive
-`tail`, but the stream keeps flowing through to the next command.
+Copy STDIN to STDOUT unchanged (like `/bin/cat`) while showing the last N lines of the stream in a
+live, in-place display on STDERR. It is a pipeline filter — like an interactive `tail`, but the
+stream keeps flowing through to the next command.
 
 ```sh
 long-running-build | scroll -20 > build.log
@@ -10,20 +10,8 @@ long-running-build | scroll -20 > build.log
 
 ![scroll showing the tail of a build while the output goes to a file](demo/static/redirect.gif)
 
-Two guarantees drive the design:
-
-* **The STDOUT copy is never slowed by the display.** STDOUT is written on a tight
-  path that hands buffers to a separate render fiber. When the terminal can't keep
-  up, the display drops intermediate states; the STDOUT copy runs at full speed.
-* **The display never shows non-contiguous output.** Each frame is a contiguous
-  run of the most recent complete lines. When lines are skipped (because the
-  display fell behind), the window resets to the newest contiguous segment rather
-  than splicing a pre-gap line onto a post-gap one. Control and escape bytes are
-  stripped from the display so a hostile stream cannot corrupt the terminal — the
-  bytes on STDOUT are always untouched.
-
 The display is only drawn when STDERR is a terminal; when STDERR is redirected,
-`scroll` is a plain `cat` (use `--force` to draw anyway).
+`scroll` acts like `cat` (use `--force` to draw to STDERR anyway).
 
 ## Installation
 
@@ -42,7 +30,7 @@ To build from source instead:
 
 ```sh
 shards build --release
-# copies to ./bin/scroll
+# builds ./bin/scroll
 ```
 
 ## Usage
@@ -173,29 +161,26 @@ has to name itself first: `scroll` asks with `XTVERSION` and waits 100ms for an
 answer naming ghostty, kitty, or iTerm2. `--terminal-progress` and
 `--no-terminal-progress` answer for it, and skip the question entirely.
 
-The line is colorized when STDERR is a terminal that can show it — `-c` forces
-color on, `-C` off, and `--color on|off|auto` says the same thing at length.
-`NO_COLOR` and a `$TERM` of `dumb` turn `auto` off. In color the bar is drawn as
-background, so the filled part and the track meet with no gap between glyphs, and
-the leading column takes one of the eighth-blocks for a seventh of a column of
-extra resolution. `--progress-charset ascii` keeps the whole line in ASCII.
+The line is colorized when STDERR is a terminal that can show it. This is controlled
+by `--color on|off|auto`, or the aliases `-c` (color on) and `-C` (color off).
+
+`NO_COLOR` or a `$TERM` of `dumb` turn `auto` off. The bar is drawn with UTF-8
+characters for a resolution of 1/8th of a character width. Use `--progress-charset ascii`
+to use ASCII.
 
 ## Alternate screen
 
 `--fullscreen` draws on the terminal's alternate screen, which appends lines
-instead of repainting a window and so keeps up with a much faster stream. It uses
-the whole screen, which is why `-N` means nothing there.
+instead of repainting a window. This means it will show every line of output and never
+skip any. It ignores `-N`. If you use `--leave`, it changes the meaning of `-N` to be
+the number of lines you want echoed to the main screen after completion, in case you want
+the last N lines in your history.
 
 ```sh
 make 2>&1 | scroll --fullscreen > build.log
 ```
 
 ![scroll on the alternate screen, leaving the last lines behind](demo/static/fullscreen.gif)
-
-On exit the screen is torn down and the original screen and scrollback come back
-untouched, leaving nothing behind. `--leave` echoes the last `-N` lines onto the
-main screen, for a run whose tail is worth keeping — the one thing `-N` still
-means here.
 
 ## Shell completion
 
@@ -206,7 +191,7 @@ eval "$(scroll --shell-completion bash)"   # or zsh, fish
 ## Development
 
 ```sh
-shards build --no-debug --error-trace   # dev build
+shards build --error-trace              # dev build
 crystal spec --error-trace              # run tests
 crystal tool format                     # format
 ameba                                   # lint
