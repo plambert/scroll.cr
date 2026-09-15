@@ -12,6 +12,14 @@ module Scroll
     FALLBACK_ROWS = 24
     FALLBACK_COLS = 80
 
+    # The stdlib binds VMIN but not VTIME, which is what puts a deadline on the
+    # probe's read.
+    {% if flag?(:darwin) %}
+      VTIME = 17
+    {% else %}
+      VTIME = 5
+    {% end %}
+
     lib LibTerminal
       struct Winsize
         ws_row : LibC::UShort
@@ -70,18 +78,58 @@ module Scroll
     def self.version_response(timeout : Time::Span = VERSION_TIMEOUT) : String?
       File.open("/dev/tty", "r+") do |tty|
         next unless tty.tty? && foreground?(tty)
-        tty.raw do
+        probe_mode(tty.fd, timeout) do
           tty << VERSION_QUERY
           tty.flush
-          tty.read_timeout = timeout
-          buffer = Bytes.new(64)
-          count = tty.read(buffer)
-          count > 0 ? String.new(buffer[0, count]) : nil
+          read_answer tty.fd
         end
       end
     rescue File::Error | IO::Error
       # No controlling terminal, or it never answered.
       nil
+    end
+
+    # Put the terminal in raw mode with a read deadline, run the probe, and put
+    # it back however that goes.
+    #
+    # The deadline is the terminal driver's own (VMIN 0, VTIME in tenths of a
+    # second), not the event loop's: /dev/tty is a File to Crystal, and a File
+    # cannot be registered with kqueue ("kevent: Invalid argument"), so an
+    # evented read raises where a blocking one would wait forever on a terminal
+    # that answers nothing.
+    private def self.probe_mode(fd : Int32, timeout : Time::Span, &)
+      saved = uninitialized LibC::Termios
+      return unless LibC.tcgetattr(fd, pointerof(saved)) == 0
+
+      probing = saved
+      LibC.cfmakeraw(pointerof(probing))
+      probing.c_cc[LibC::VMIN] = 0_u8
+      probing.c_cc[VTIME] = (timeout.total_milliseconds / 100).ceil.clamp(1, 255).to_u8
+      return unless LibC.tcsetattr(fd, LibC::TCSANOW, pointerof(probing)) == 0
+
+      begin
+        yield
+      ensure
+        LibC.tcsetattr(fd, LibC::TCSANOW, pointerof(saved))
+      end
+    end
+
+    # Read whatever the terminal sends back. Each read returns as soon as the
+    # driver has bytes, or empty-handed once VTIME expires.
+    private def self.read_answer(fd : Int32) : String?
+      answer = IO::Memory.new
+      buffer = Bytes.new(64)
+
+      while answer.bytesize < 256
+        count = LibC.read(fd, buffer, buffer.size)
+        break if count <= 0
+        answer.write buffer[0, count.to_i32]
+        # The reply is a DCS string; either terminator ends it.
+        text = answer.to_s
+        break if text.ends_with?("\e\\") || text.ends_with?('\a')
+      end
+
+      answer.empty? ? nil : answer.to_s
     end
 
     private def self.foreground?(tty : IO::FileDescriptor) : Bool

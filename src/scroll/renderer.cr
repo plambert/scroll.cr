@@ -60,6 +60,9 @@ module Scroll
       last = @height - 1
       sequence = String.build do |str|
         @height.times do |row|
+          # Back to column 0 first: the row is overwritten from there and then
+          # cleared to its end, so nothing of what was on the line survives.
+          str << '\r'
           if progress && row == last
             # Written as it came: the progress line is ours, already fitted to
             # the width and sanitized, and it carries its own color escapes.
