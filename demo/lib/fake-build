@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Plausible build output at a steady rate, seeded so every take is the same run.
+#
+#   fake-build [LINES] [LINES_PER_SECOND]
+
+set -uo pipefail
+
+lines="${1:-400}"
+rate="${2:-30}"
+delay="$(awk -v rate="$rate" 'BEGIN { printf "%.4f", 1 / rate }')"
+
+RANDOM=1979
+
+units=(parser lexer codegen linker optimizer scheduler allocator resolver
+  emitter verifier inliner regalloc)
+kinds=(Compiling Linking Generating Checking Emitting Optimizing)
+
+for ((line = 1; line <= lines; line++)); do
+  unit="${units[RANDOM % ${#units[@]}]}"
+  kind="${kinds[RANDOM % ${#kinds[@]}]}"
+  ms=$((20 + RANDOM % 400))
+  printf '[%4d/%4d] %-11s src/%s/%s_%03d.cr (%dms)\n' \
+    "$line" "$lines" "$kind" "$unit" "$unit" "$((RANDOM % 1000))" "$ms"
+  # A burst every so often, so the display has something to fall behind on.
+  if ((line % 97 == 0)); then
+    for ((burst = 0; burst < 40; burst++)); do
+      printf '[%4d/%4d] %-11s src/%s/inline_%03d.cr (%dms)\n' \
+        "$line" "$lines" Inlining "$unit" "$burst" "$((RANDOM % 100))"
+    done
+  fi
+  sleep "$delay"
+done

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Append log lines to a file at a steady rate, for the --file follow demo.
+#
+#   writer PATH [LINES] [LINES_PER_SECOND]
+
+set -uo pipefail
+
+path="${1:?usage: writer PATH [LINES] [RATE]}"
+lines="${2:-400}"
+rate="${3:-6}"
+delay="$(awk -v rate="$rate" 'BEGIN { printf "%.4f", 1 / rate }')"
+
+RANDOM=4711
+
+levels=(INFO INFO INFO INFO WARN INFO INFO DEBUG INFO ERROR)
+paths=(/health /api/users /api/orders /api/orders/4821 /assets/app.js /login
+  /api/search /api/orders/9912 /metrics /api/users/331)
+
+for ((line = 1; line <= lines; line++)); do
+  level="${levels[RANDOM % ${#levels[@]}]}"
+  route="${paths[RANDOM % ${#paths[@]}]}"
+  status=200
+  [[ "$level" == WARN ]] && status=429
+  [[ "$level" == ERROR ]] && status=503
+  printf '%s %-5s %-24s %s %3dms\n' \
+    "$(date -u '+%H:%M:%S')" "$level" "$route" "$status" "$((3 + RANDOM % 240))" \
+    >>"$path"
+  sleep "$delay"
+done

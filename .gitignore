@@ -3,3 +3,5 @@
 /bin/
 /.shards/
 *.dwarf
+/demo/out/
+/demo/work/

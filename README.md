@@ -5,8 +5,10 @@ live, in-place display on STDERR. It is a pipeline filter — like an interactiv
 `tail`, but the stream keeps flowing through to the next command.
 
 ```sh
-long-running-build | scroll -20 | tee build.log
+long-running-build | scroll -20 > build.log
 ```
+
+![scroll showing the tail of a build while the output goes to a file](demo/static/redirect.gif)
 
 Two guarantees drive the design:
 
@@ -93,6 +95,11 @@ A bare `-N` is shorthand for `--lines N` (e.g. `-20` means `--lines 20`).
 tail -f access.log | scroll | grep -v healthcheck > filtered.log
 ```
 
+`--null` consumes the input and writes nothing, for when only the display is
+wanted. The `wc -c` below is there to show that STDOUT stayed empty:
+
+![scroll with --null, writing nothing to STDOUT](demo/static/null.gif)
+
 ## Following a file
 
 `--file`/`-f` follows a path the way `tail -F` does, reading appended data live
@@ -106,6 +113,8 @@ file instead. File mode implies `--null`, so nothing is written to STDOUT unless
 scroll -f /var/log/app.log --pid "$(pgrep -f app)"
 ```
 
+![scroll following a file, starting with the lines already in it](demo/static/follow.gif)
+
 `--pid` ends the run once that process is gone. On Linux, `--watch-proc` ends it
 once no process holds the file open for writing, after `--watch-proc-timeout`
 idle seconds.
@@ -118,6 +127,8 @@ STDOUT stays a byte-for-byte copy in input order; only the display is reordered.
 ```sh
 du -sh * | scroll --null --sort --human
 ```
+
+![scroll keeping the largest lines of the whole stream](demo/static/sort.gif)
 
 `--sort-by` picks the key: a 1-based whitespace column, or a `/regex/` whose key
 is the named capture `sort`, else the first group, else the whole match.
@@ -149,6 +160,8 @@ label. Giving both a byte size and a line count warns and uses the byte size.
 xz -dc archive.tar.xz | scroll --size 4.2G --name archive.tar.xz > /dev/null
 ```
 
+![the progress line with a bar, an ETA, and a label](demo/static/progress.gif)
+
 A name takes the space the stats leave, and scrolls horizontally when the
 terminal is too narrow to show it whole. A narrow terminal gives up stats fields
 before the bar and the name lose room.
@@ -176,6 +189,8 @@ the whole screen, which is why `-N` means nothing there.
 ```sh
 make 2>&1 | scroll --fullscreen > build.log
 ```
+
+![scroll on the alternate screen, leaving the last lines behind](demo/static/fullscreen.gif)
 
 On exit the screen is torn down and the original screen and scrollback come back
 untouched, leaving nothing behind. `--leave` echoes the last `-N` lines onto the

@@ -10,7 +10,7 @@ module Scroll
     onto the main screen on the way out.
 
     Examples:
-      long-running-build | scroll -20 | tee build.log
+      long-running-build | scroll -20 > build.log
       noisy-job | scroll --null                     watch the tail, discard output
       scroll -f app.log --pid $(pgrep -f app)       follow a file until app exits
       du -sh * | scroll --null --sort --human       keep the largest on screen
