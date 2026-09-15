@@ -97,6 +97,7 @@ module Scroll
         Progress.human_bytes(1_260_i64).should eq("1.2K")
         Progress.human_bytes(12_600_i64).should eq("12K")
         Progress.human_bytes(1_300_000_i64).should eq("1.2M")
+        Progress.human_bytes(1_000_000_i64).should eq("977K")
       end
     end
 
@@ -104,8 +105,22 @@ module Scroll
       it "drops the unit letter at the bottom of the scale" do
         Progress.human_count(0_i64).should eq("0")
         Progress.human_count(999_i64).should eq("999")
-        Progress.human_count(2_048_i64).should eq("2.0K")
-        Progress.human_count(20_480_i64).should eq("20K")
+        Progress.human_count(2_000_i64).should eq("2.0K")
+        Progress.human_count(20_000_i64).should eq("20K")
+      end
+
+      it "scales counts by 1000, not 1024" do
+        Progress.human_count(1_000_i64).should eq("1.0K")
+        Progress.human_count(1_000_000_i64).should eq("1.0M")
+        Progress.human_count(1_500_000_i64).should eq("1.5M")
+        Progress.human_count(1_000_000_000_i64).should eq("1.0G")
+      end
+    end
+
+    describe "rounding across a unit boundary" do
+      it "carries into the next unit instead of printing a full base" do
+        Progress.human_count(999_999_i64).should eq("1.0M")
+        Progress.human_bytes(1_048_570_i64).should eq("1.0M")
       end
     end
 
