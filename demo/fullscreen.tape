@@ -3,7 +3,7 @@
 Output .frames/
 Source ../prelude.tape
 
-Type "fake-build 70 6 | scroll --fullscreen --leave -8 > build.log"
+Type "fake-build 70 6 | scroll -8 --fullscreen --leave > build.log"
 Sleep 1s
 Enter
 Sleep 10s
