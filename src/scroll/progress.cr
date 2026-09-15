@@ -373,22 +373,34 @@ module Scroll
       text.gsub { |char| char.control? || (0x80..0x9F).includes?(char.ord) ? "" : char }
     end
 
+    # Bytes scale by 1024, because that is what a byte size means. Counts of
+    # things scale by 1000, so a million lines reads as 1.0M and not 977K.
+    BYTE_BASE  = 1024
+    COUNT_BASE = 1000
+
     # 1024-based, at most one decimal: 512B, 1.2K, 12K, 1.2M.
     def self.human_bytes(value : Int64) : String
-      human value, BYTE_UNITS
+      human value, BYTE_UNITS, BYTE_BASE
     end
 
-    # The same shape without the unit letter at the bottom: 512, 1.2K, 12K.
+    # The same shape, 1000-based and without the unit letter at the bottom:
+    # 512, 1.2K, 12K.
     def self.human_count(value : Int64) : String
-      human value, COUNT_UNITS
+      human value, COUNT_UNITS, COUNT_BASE
     end
 
-    private def self.human(value : Int64, units : Array(String)) : String
+    private def self.human(value : Int64, units : Array(String), base : Int32) : String
       return "0#{units[0]}" if value <= 0
       scaled = value.to_f
       index = 0
-      while scaled >= 1024 && index < units.size - 1
-        scaled /= 1024
+      while scaled >= base && index < units.size - 1
+        scaled /= base
+        index += 1
+      end
+      # Rounding can carry into the next unit (1023.6K is 1.0M, not 1024K), so
+      # step up once more when it does.
+      if scaled.round >= base && index < units.size - 1
+        scaled /= base
         index += 1
       end
       digits = scaled < 10 && index > 0 ? "%.1f" % scaled : scaled.round.to_i64.to_s
